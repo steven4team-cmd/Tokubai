@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FlipFinder — eBay deal scanner</title>
+<meta name="description" content="Scan live eBay listings, compare them against the market, and spot underpriced resale deals." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,500;0,800;1,800&family=Public+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 14 14 4h10a4 4 0 0 1 4 4v10L18 28a3 3 0 0 1-4.2 0L4 18.2A3 3 0 0 1 4 14Z' fill='%23ff5a36'/%3E%3Ccircle cx='22' cy='10' r='2.4' fill='%23fff'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-row">
+    <a class="brand" href="#" id="brandHome" aria-label="FlipFinder home">
+      <svg class="brand-tag" viewBox="0 0 32 32" aria-hidden="true"><path d="M4 14 14 4h10a4 4 0 0 1 4 4v10L18 28a3 3 0 0 1-4.2 0L4 18.2A3 3 0 0 1 4 14Z"/><circle cx="22" cy="10" r="2.4" class="hole"/></svg>
+      <span>Flip<em>Finder</em></span>
+    </a>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab on" data-tab="search" role="tab" aria-selected="true">Scan</button>
+      <button class="tab" data-tab="watch" role="tab" aria-selected="false">Watchlist <span class="count" id="watchCount" hidden>0</span></button>
+      <button class="tab" data-tab="settings" role="tab" aria-selected="false">Settings</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ============ SCAN ============ -->
+  <section id="tab-search" class="pane" role="tabpanel">
+    <div class="hero">
+      <h1>Find listings priced below the market.</h1>
+      <p class="sub">Type a product. FlipFinder pulls live eBay listings, reads the market from current asking prices, and flags the ones sitting under it.</p>
+      <form id="searchForm" class="searchbar" autocomplete="off">
+        <input id="q" type="text" inputmode="search" placeholder='Try “lego death star under $300” or “gaming laptop”' aria-label="Search eBay" />
+        <button type="submit" class="btn solid" id="scanBtn">Scan eBay</button>
+      </form>
+      <div class="chips" id="recentChips" aria-label="Recent scans"></div>
+    </div>
+
+    <div class="filters" id="filters">
+      <label>Max price
+        <input id="fMax" type="number" min="0" step="1" placeholder="any" />
+      </label>
+      <label>Category
+        <select id="fCat">
+          <option value="">All categories</option>
+          <option value="220">Toys &amp; Hobbies</option>
+          <option value="2536">Collectible Card Games</option>
+          <option value="1249">Video Games &amp; Consoles</option>
+          <option value="58058">Computers &amp; Tablets</option>
+          <option value="9355">Cell Phones</option>
+          <option value="293">Consumer Electronics</option>
+          <option value="31387">Wristwatches</option>
+          <option value="15709">Athletic Shoes</option>
+          <option value="11450">Clothing &amp; Accessories</option>
+          <option value="267">Books</option>
+        </select>
+      </label>
+      <label>Condition
+        <select id="fCond">
+          <option value="">Any condition</option>
+          <option value="NEW">New</option>
+          <option value="USED">Used</option>
+        </select>
+      </label>
+      <label>Listing type
+        <select id="fType">
+          <option value="">Buy It Now + Auction</option>
+          <option value="FIXED_PRICE">Buy It Now only</option>
+          <option value="AUCTION">Auction only</option>
+        </select>
+      </label>
+      <label>Sort by
+        <select id="fSort">
+          <option value="score">Deal score</option>
+          <option value="totalAsc">Total cost: low → high</option>
+          <option value="newest">Newest listed</option>
+          <option value="ending">Ending soonest</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="marketStrip" class="market" hidden></div>
+    <div id="status" class="status" hidden></div>
+    <div id="results" class="grid" aria-live="polite"></div>
+    <div class="more-row"><button id="moreBtn" class="btn ghost" hidden>Load more results</button></div>
+
+    <div id="emptyState" class="empty">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 14 14 4h10a4 4 0 0 1 4 4v10L18 28a3 3 0 0 1-4.2 0L4 18.2A3 3 0 0 1 4 14Z"/><circle cx="22" cy="10" r="2.4" class="hole"/></svg>
+      <h2>No scans yet</h2>
+      <p>Search anything resellable — <button class="linklike eg" data-eg="lego death star under $300">lego death star under $300</button>, <button class="linklike eg" data-eg="pokemon cards booster box">pokemon cards booster box</button>, <button class="linklike eg" data-eg="gaming laptop rtx 4070 under $900">gaming laptop rtx 4070</button>.</p>
+      <p class="dim" id="setupNudge" hidden>First time here? Open <button class="linklike" id="goSettings">Settings</button> to connect your eBay API key — takes about five minutes.</p>
+    </div>
+  </section>
+
+  <!-- ============ WATCHLIST ============ -->
+  <section id="tab-watch" class="pane" role="tabpanel" hidden>
+    <div class="pane-head">
+      <h1>Watchlist</h1>
+      <button id="refreshWatch" class="btn ghost">↻ Refresh prices</button>
+    </div>
+    <div id="watchStatus" class="status" hidden></div>
+    <div id="watchGrid" class="grid"></div>
+    <div id="watchEmpty" class="empty">
+      <h2>Nothing watched yet</h2>
+      <p>Tap <strong>☆ Watch</strong> on any result to track it here. “Refresh prices” re-checks every watched listing and shows what moved.</p>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section id="tab-settings" class="pane settings" role="tabpanel" hidden>
+    <h1>Settings</h1>
+    <p class="sub">Everything below is saved only in this browser — keys never leave your device except to call eBay.</p>
+
+    <fieldset>
+      <legend>eBay API</legend>
+      <label>Client ID <span class="hint">(App ID — production keyset)</span>
+        <input id="sClientId" type="text" spellcheck="false" placeholder="YourApp-PRD-xxxxxxxx-xxxxxxxx" />
+      </label>
+      <label>Client Secret <span class="hint">(Cert ID)</span>
+        <input id="sClientSecret" type="password" spellcheck="false" placeholder="PRD-xxxxxxxxxxxx" />
+      </label>
+      <label>CORS proxy URL <span class="hint">(your deployed worker.js — see README)</span>
+        <input id="sProxy" type="url" spellcheck="false" placeholder="https://your-worker.your-name.workers.dev" />
+      </label>
+      <label>Marketplace
+        <select id="sMarket">
+          <option value="EBAY_US">eBay US</option>
+          <option value="EBAY_GB">eBay UK</option>
+          <option value="EBAY_CA">eBay Canada</option>
+          <option value="EBAY_DE">eBay Germany</option>
+          <option value="EBAY_AU">eBay Australia</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Profit math</legend>
+      <label>Selling fees <span class="hint">(% taken when you resell — eBay final value fee ≈ 13.25)</span>
+        <input id="sFee" type="number" min="0" max="50" step="0.05" />
+      </label>
+      <label>Outbound shipping &amp; supplies <span class="hint">(flat cost per flip, in your currency)</span>
+        <input id="sShipOut" type="number" min="0" step="0.5" />
+      </label>
+    </fieldset>
+
+    <div class="settings-actions">
+      <button id="saveSettings" class="btn solid">Save settings</button>
+      <button id="testSettings" class="btn ghost">Test connection</button>
+      <span id="settingsStatus" class="status-inline" role="status"></span>
+    </div>
+
+    <details class="howto">
+      <summary>Where do these keys come from?</summary>
+      <ol>
+        <li>Create a free account at <a href="https://developer.ebay.com" target="_blank" rel="noopener">developer.ebay.com</a> and make an application keyset (Production).</li>
+        <li>Copy the <strong>App ID (Client ID)</strong> and <strong>Cert ID (Client Secret)</strong> into the fields above.</li>
+        <li>Deploy the included <code>worker.js</code> to Cloudflare Workers (free) and paste its URL as the CORS proxy — browsers can’t call eBay directly. Full steps are in the README.</li>
+      </ol>
+    </details>
+  </section>
+
+</main>
+
+<footer class="foot wrap">
+  <span>Deal scores and profit figures are estimates from live <em>asking</em> prices, not sold data. Always check sold comps before buying.</span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
