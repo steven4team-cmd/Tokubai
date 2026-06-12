@@ -1,5 +1,5 @@
 /* ============================================================
-   FlipFinder — app logic
+   Tokubai — app logic
    eBay Browse API via your CORS proxy · everything stored locally
    ============================================================ */
 "use strict";
