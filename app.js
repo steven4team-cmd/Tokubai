@@ -28,6 +28,7 @@ let results = [];            // normalized listings from the last scan
 let market = null;           // { median, count, currency }
 let lastQuery = null;        // { q, params } for Load more
 let nextOffset = 0;
+let isScanning = false;      // prevents concurrent scans
 const PAGE = 60;
 const FALLBACK_IMG = "data:image/svg+xml," + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 90"><rect width="120" height="90" fill="#eef1ee"/><path d="M42 48 56 34h14a5 5 0 0 1 5 5v14L61 67a4 4 0 0 1-5.6 0L42 53.6a4 4 0 0 1 0-5.6Z" fill="#c9cfca"/></svg>`);
@@ -347,18 +348,22 @@ function showStatus(msg, cls) {
    SCAN FLOW
    ============================================================ */
 async function runScan(rawQuery, append) {
+  if (isScanning) return;
   const { q, max } = parseQuery(rawQuery);
   if (!q) return;
   if (!settingsReady()) {
-    showStatus("Connect your eBay API key first — open Settings (top right). Setup takes about five minutes.", "err");
-    switchTab("settings");
+    showStatus(“Connect your eBay API key first — open Settings (top right). Setup takes about five minutes.”, “err”);
+    switchTab(“settings”);
     return;
   }
-  if (max != null) $("#fMax").value = max;
+  if (max != null) $(“#fMax”).value = max;
 
-  const btn = $("#scanBtn");
+  const btn = $(“#scanBtn”);
+  const moreBtn = $(“#moreBtn”);
+  isScanning = true;
   btn.disabled = true;
-  showStatus(append ? "Loading more…" : `Scanning eBay for “${q}”…`, "busy");
+  moreBtn.disabled = true;
+  showStatus(append ? “Loading more…” : `Scanning eBay for “${q}”…`, “busy”);
   if (!append) {
     nextOffset = 0;
     results = [];
@@ -387,7 +392,9 @@ async function runScan(rawQuery, append) {
     if (!append) { results = []; renderResults(); }
     showStatus(friendlyError(e), "err");
   } finally {
+    isScanning = false;
     btn.disabled = false;
+    moreBtn.disabled = false;
   }
 }
 
@@ -498,7 +505,7 @@ $("#refreshWatch").addEventListener("click", async () => {
   }
   lsSet(K.watch, list);
   renderWatch();
-  showWatchStatus(`Done — ${list.length} checked${gone ? `, ${gone} no longer live (sold or ended)` : ""}. ▼ green means the price dropped.`, "");
+  showWatchStatus(`Done — ${list.length} checked${gone ? `, ${gone} no longer live (sold or ended)` : ""}. ▼ green means the price dropped.`, "ok");
   btn.disabled = false;
 });
 
