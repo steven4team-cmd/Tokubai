@@ -352,18 +352,18 @@ async function runScan(rawQuery, append) {
   const { q, max } = parseQuery(rawQuery);
   if (!q) return;
   if (!settingsReady()) {
-    showStatus(“Connect your eBay API key first — open Settings (top right). Setup takes about five minutes.”, “err”);
-    switchTab(“settings”);
+    showStatus("Connect your eBay API key first — open Settings (top right). Setup takes about five minutes.", "err");
+    switchTab("settings");
     return;
   }
-  if (max != null) $(“#fMax”).value = max;
+  if (max != null) $("#fMax").value = max;
 
-  const btn = $(“#scanBtn”);
-  const moreBtn = $(“#moreBtn”);
+  const btn = $("#scanBtn");
+  const moreBtn = $("#moreBtn");
   isScanning = true;
   btn.disabled = true;
   moreBtn.disabled = true;
-  showStatus(append ? “Loading more…” : `Scanning eBay for “${q}”…`, “busy”);
+  showStatus(append ? "Loading more…" : `Scanning eBay for “${q}”…`, "busy");
   if (!append) {
     nextOffset = 0;
     results = [];
