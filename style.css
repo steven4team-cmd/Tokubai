@@ -295,6 +295,7 @@ a { color: inherit; }
 .badge.auction { background: var(--amber-soft); color: var(--amber); border-color: transparent; }
 .badge.ending { background: var(--red-soft); color: var(--red); border-color: transparent; }
 .badge.gone { background: var(--ink); color: var(--surface); border-color: transparent; }
+.badge.fresh { background: var(--olive-soft); color: var(--olive); border-color: transparent; }
 
 /* ledger rows */
 .ledger { font-family: var(--mono); font-size: 13px; }
@@ -311,6 +312,10 @@ a { color: inherit; }
 .seller { font-size: 12px; color: var(--muted); }
 .seller b { color: var(--ink); font-weight: 600; }
 .checked { font: 11.5px var(--mono); color: var(--faint); }
+.spark { width: 100%; height: 26px; display: block; }
+.spark polyline { stroke: var(--muted); stroke-width: 1.5; }
+.spark.down polyline { stroke: var(--ok); }   /* price falling = good for buyers */
+.spark.up polyline { stroke: var(--bad); }
 .delta { font: 600 12.5px var(--mono); }
 .delta.down { color: var(--ok); }
 .delta.up { color: var(--bad); }
@@ -362,6 +367,26 @@ a { color: inherit; }
 .howto ol { padding-left: 20px; }
 .howto li { margin: 8px 0; }
 .howto code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+
+/* ---------- dialog ---------- */
+dialog {
+  border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--surface); color: var(--ink);
+  box-shadow: var(--shadow-md); padding: 20px 22px;
+  width: min(92vw, 400px);
+}
+dialog::backdrop { background: rgba(0,0,0,.38); backdrop-filter: blur(2px); }
+dialog h3 { margin: 0 0 6px; font-family: var(--display); font-weight: 800; letter-spacing: -.02em; font-size: 18px; }
+.dlg-info { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
+.dlg-info b { color: var(--ink); }
+dialog label { display: block; font-weight: 600; font-size: 13.5px; }
+dialog input {
+  display: block; width: 100%; margin-top: 6px;
+  font: 15px var(--mono); color: var(--ink); background: var(--bg);
+  border: 1.5px solid var(--border); border-radius: 8px; padding: 10px 12px;
+}
+dialog input:focus { border-color: var(--red); outline: none; box-shadow: 0 0 0 3px var(--red-soft); }
+.dlg-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 
 /* ---------- footer ---------- */
 .foot { padding: 28px 20px 52px; color: var(--faint); font-size: 12.5px; border-top: 1px solid var(--border); margin-top: 16px; }

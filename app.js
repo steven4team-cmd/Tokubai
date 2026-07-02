@@ -296,6 +296,22 @@ function scoreListing(x, mkt) {
 /* ============================================================
    RENDERING
    ============================================================ */
+function sparkSVG(hist) {
+  const pts = (hist || []).filter((h) => h && h.v != null);
+  if (pts.length < 2) return "";
+  const vs = pts.map((h) => h.v);
+  const min = Math.min(...vs), max = Math.max(...vs);
+  const span = max - min || 1;
+  const W = 120, H = 26, P = 2;
+  const line = pts.map((h, i) => {
+    const x = P + (i / (pts.length - 1)) * (W - 2 * P);
+    const y = H - P - ((h.v - min) / span) * (H - 2 * P);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const dir = vs[vs.length - 1] < vs[0] ? "down" : vs[vs.length - 1] > vs[0] ? "up" : "flat";
+  return `<svg class="spark ${dir}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true" title="Price history since saved"><polyline points="${line}" fill="none" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
 function timeAgo(ts) {
   const m = Math.round((Date.now() - ts) / 6e4);
   if (m < 1) return "just now";
@@ -331,6 +347,7 @@ function cardHTML(x, sc, opts) {
     <div class="body">
       <div class="badges">
         ${o.ended ? `<span class="badge gone">ENDED</span>` : ""}
+        ${!o.watch && x.listedAt && Date.now() - x.listedAt < 48 * 36e5 ? `<span class="badge fresh">⚡ listed ${timeAgo(x.listedAt)}</span>` : ""}
         ${x.condition ? `<span class="badge">${esc(x.condition)}</span>` : ""}
         ${x.isAuction ? `<span class="badge auction">AUCTION · bid</span>` : (x.isBIN ? `<span class="badge">BUY IT NOW</span>` : "")}
         ${endingSoon ? `<span class="badge ending">⏱ ${timeLeft(x.endAt)}</span>` : (x.isAuction && x.endAt && !o.ended ? `<span class="badge">${timeLeft(x.endAt)}</span>` : "")}
@@ -343,6 +360,7 @@ function cardHTML(x, sc, opts) {
       </div>
       ${sc && sc.discount > 0.02 ? `<div class="below"><b>${Math.round(sc.discount * 100)}% below</b> market median ${money(marketRef().median, x.currency)}</div>` : ""}
       ${sc && sc.profit != null ? `<div class="profit">≈ +${money(sc.profit, x.currency)} est. profit if flipped at market</div>` : ""}
+      ${o.hist ? sparkSVG(o.hist) : ""}
       ${o.delta != null ? `<div class="delta ${o.delta < 0 ? "down" : "up"}">${o.delta < 0 ? "▼" : "▲"} ${money(Math.abs(o.delta), x.currency)} since saved</div>` : ""}
       ${x.seller.name ? `<div class="seller">Seller <b>${esc(x.seller.name)}</b>${x.seller.pct != null ? ` · ${x.seller.pct}% (${x.seller.n.toLocaleString()})` : ""}</div>` : ""}
       ${o.checked ? `<div class="checked">↻ checked ${timeAgo(o.checked)}</div>` : ""}
@@ -453,7 +471,10 @@ async function runScan(rawQuery, append, keepFilters) {
     showStatus(results.length ? null : `No live listings matched “${q}” with these filters. Loosen the filters or reword the search.`);
     if (!append && !keepFilters) pushRecent(rawQuery);
     // make the scan shareable/bookmarkable (throws on file://, where it can't work)
-    if (!append) { try { history.replaceState(null, "", "?q=" + encodeURIComponent(rawQuery)); } catch { /* noop */ } }
+    if (!append) {
+      document.title = `${q} — Tokubai`;
+      try { history.replaceState(null, "", "?q=" + encodeURIComponent(rawQuery)); } catch { /* noop */ }
+    }
   } catch (e) {
     if (!append) { results = []; renderResults(); }
     showStatus(friendlyError(e), "err");
@@ -513,7 +534,7 @@ function toggleWatch(id) {
   } else {
     const x = results.find((r) => r.id === id);
     if (!x) return;
-    list.unshift({ ...x, savedAt: Date.now(), savedTotal: x.total, lastTotal: x.total, checkedAt: null });
+    list.unshift({ ...x, savedAt: Date.now(), savedTotal: x.total, lastTotal: x.total, checkedAt: null, hist: x.total != null ? [{ t: Date.now(), v: x.total }] : [] });
     if (list.length > 60) list = list.slice(0, 60);
   }
   lsSet(K.watch, list);
@@ -533,6 +554,8 @@ document.addEventListener("click", (e) => {
   if (h) { hideListing(h.dataset.hide); return; }
   const ar = e.target.closest("[data-runalert]");
   if (ar) { runAlertSearch(ar.dataset.runalert); return; }
+  const ae = e.target.closest("[data-editalert]");
+  if (ae) { editAlert(ae.dataset.editalert); return; }
   const ad = e.target.closest("[data-delalert]");
   if (ad) { deleteAlert(ad.dataset.delalert); return; }
   const w = e.target.closest("[data-watch]");
@@ -564,17 +587,29 @@ function updateWatchCount() {
   el.hidden = n === 0;
 }
 
+function watchDelta(x) {
+  return x.checkedAt != null && x.savedTotal != null && x.lastTotal != null && x.lastTotal !== x.savedTotal
+    ? x.lastTotal - x.savedTotal : null;
+}
+
 function renderWatch() {
-  const list = getWatch();
+  const list = getWatch().slice();
   const grid = $("#watchGrid");
   _marketRef = null; // watch cards don't show market lines
+
+  const sortBy = $("#watchSort").value;
+  if (sortBy === "drop") list.sort((a, b) => (watchDelta(a) ?? 0) - (watchDelta(b) ?? 0)); // biggest drop first
+  else if (sortBy === "total") list.sort((a, b) => ((a.lastTotal ?? a.total) ?? 1e12) - ((b.lastTotal ?? b.total) ?? 1e12));
+  else if (sortBy === "ending") list.sort((a, b) => (a.endAt || 9e15) - (b.endAt || 9e15));
+  // "saved" = stored order (newest saved first) — no sort needed
+
   grid.innerHTML = list.map((x) => {
-    const delta = x.checkedAt != null && x.savedTotal != null && x.lastTotal != null && x.lastTotal !== x.savedTotal
-      ? x.lastTotal - x.savedTotal : null;
-    return cardHTML({ ...x, total: x.lastTotal != null ? x.lastTotal : x.total }, null, { delta, ended: !!x.ended, watch: true, checked: x.checkedAt });
+    return cardHTML({ ...x, total: x.lastTotal != null ? x.lastTotal : x.total }, null,
+      { delta: watchDelta(x), ended: !!x.ended, watch: true, checked: x.checkedAt, hist: x.hist });
   }).join("");
   $("#watchEmpty").hidden = list.length > 0;
 }
+$("#watchSort").addEventListener("change", renderWatch);
 
 function showWatchStatus(msg, cls) {
   const el = $("#watchStatus");
@@ -613,6 +648,13 @@ async function refreshWatchPrices(auto) {
         w.shipping = fresh.shipping; w.shippingKnown = fresh.shippingKnown;
         w.endAt = fresh.endAt || w.endAt;
         w.checkedAt = Date.now();
+        // price history for the sparkline — record changes, cap the series
+        if (w.lastTotal != null) {
+          if (!w.hist || !w.hist.length) w.hist = w.savedTotal != null ? [{ t: w.savedAt || Date.now(), v: w.savedTotal }] : [];
+          const lastPt = w.hist[w.hist.length - 1];
+          if (!lastPt || lastPt.v !== w.lastTotal || w.hist.length < 2) w.hist.push({ t: Date.now(), v: w.lastTotal });
+          if (w.hist.length > 60) w.hist = w.hist.slice(-60);
+        }
         // ended listings can still answer with 200 — catch them by end date
         if (w.endAt && w.endAt < Date.now()) { w.ended = true; gone++; }
         else if (fresh.total != null && prev != null && fresh.total < prev - 0.005) {
@@ -734,32 +776,75 @@ function renderAlerts() {
     <div class="alert-row">
       <button class="alert-run" data-runalert="${esc(a.id)}" title="Run this search now, newest first">🔔 <b>${esc(a.q)}</b> — at or under ${money(a.target, a.currency)}</button>
       <span class="alert-meta">${a.lastRunAt ? `checked ${timeAgo(a.lastRunAt)}` : "not checked yet"}${a.hits ? ` · ${a.hits} found so far` : ""}</span>
-      <button class="alert-del" data-delalert="${esc(a.id)}" aria-label="Delete this alert">✕</button>
+      <button class="alert-del" data-editalert="${esc(a.id)}" aria-label="Edit target price" title="Edit target price">✎</button>
+      <button class="alert-del" data-delalert="${esc(a.id)}" aria-label="Delete this alert" title="Delete alert">✕</button>
     </div>`).join("");
 }
 
-function createAlertFromScan() {
-  if (!lastQuery) return;
-  const cur = market ? market.currency : marketCurrency();
-  const suggested = market ? Math.round(market.median * 0.75) : parseFloat($("#fMax").value) || "";
-  const raw = prompt(
-    `Alert when a newly-listed “${lastQuery.q}” totals at or under… (${cur})` +
-    (market ? `\nMarket median is ${money(market.median, cur)} — a good target sits below it.` : ""),
-    suggested
-  );
-  if (raw == null) return; // cancelled
-  const target = parseFloat(raw);
-  if (isNaN(target) || target <= 0) { showStatus("Alert not saved — enter a plain number, like 250.", "err"); return; }
+const alertDlg = $("#alertDlg");
+let dlgCtx = null; // what the open dialog is editing/creating
 
-  const a = { id: String(Date.now()), q: lastQuery.q, target, currency: cur, createdAt: Date.now(), lastRunAt: null, seen: [], hits: 0 };
+function openAlertDialog(ctx) {
+  dlgCtx = ctx;
+  $("#alertDlgTitle").textContent = ctx.mode === "edit" ? "Edit deal alert" : "New deal alert";
+  $("#alertDlgInfo").innerHTML = ctx.info;
+  $("#alertTarget").value = ctx.suggested || "";
+  alertDlg.returnValue = "";
+  alertDlg.showModal();
+  $("#alertTarget").select();
+}
+
+alertDlg.addEventListener("close", () => {
+  const ctx = dlgCtx;
+  dlgCtx = null;
+  if (!ctx || alertDlg.returnValue !== "save") return;
+  const target = parseFloat($("#alertTarget").value);
+  if (isNaN(target) || target <= 0) return;
+
+  if (ctx.mode === "edit") {
+    const alerts = getAlerts();
+    const a = alerts.find((x) => x.id === ctx.id);
+    if (!a) return;
+    a.target = target;
+    lsSet(K.alerts, alerts);
+    renderAlerts();
+    showWatchStatus(`Alert updated — “${a.q}” now flags at ${money(target, a.currency)} or less.`, "ok");
+    return;
+  }
+
+  const a = { id: String(Date.now()), q: ctx.q, target, currency: ctx.currency, createdAt: Date.now(), lastRunAt: null, seen: [], hits: 0 };
   const alerts = [a, ...getAlerts().filter((x) => x.q.toLowerCase() !== a.q.toLowerCase())].slice(0, 20);
   lsSet(K.alerts, alerts);
   renderAlerts();
   showStatus(
-    `Alert saved — new “${a.q}” listings at ${money(target, cur)} or less get flagged on every refresh. Manage alerts in the Watchlist tab.` +
+    `Alert saved — new “${a.q}” listings at ${money(target, ctx.currency)} or less get flagged on every refresh. Manage alerts in the Watchlist tab.` +
     (notifyOn ? "" : " Turn on 🔔 Alerts there for desktop pings."), "ok");
   // seed with what's listed right now, so only genuinely NEW listings ping
   checkAlert(a, true).then(() => { lsSet(K.alerts, alerts); renderAlerts(); }).catch(() => { /* seeds on the next check instead */ });
+});
+
+function createAlertFromScan() {
+  if (!lastQuery) return;
+  const cur = market ? market.currency : marketCurrency();
+  openAlertDialog({
+    mode: "create",
+    q: lastQuery.q,
+    currency: cur,
+    suggested: market ? Math.round(market.median * 0.75) : parseFloat($("#fMax").value) || "",
+    info: `Watching for new <b>“${esc(lastQuery.q)}”</b> listings.` +
+      (market ? ` Market median is <b>${money(market.median, cur)}</b> — a good target sits below it.` : ""),
+  });
+}
+
+function editAlert(id) {
+  const a = getAlerts().find((x) => x.id === id);
+  if (!a) return;
+  openAlertDialog({
+    mode: "edit",
+    id: a.id,
+    suggested: a.target,
+    info: `Editing the alert for <b>“${esc(a.q)}”</b> (currently ${money(a.target, a.currency)}).`,
+  });
 }
 
 async function checkAlert(a, seed) {
