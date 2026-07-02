@@ -12,7 +12,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const lsGet = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full/blocked */ } };
 
-const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto" };
+const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts" };
 
 const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5 };
 let settings = { ...DEFAULTS, ...lsGet(K.settings, {}) };
@@ -119,7 +119,16 @@ async function fetchToken() {
   return data.access_token;
 }
 
-async function ebayGET(path) {
+// short-lived response cache — flipping a filter back and forth, or re-running
+// the same search, answers from memory instead of burning another API call
+const apiCache = new Map(); // path → { t, data }
+const API_CACHE_MS = 90 * 1000;
+
+async function ebayGET(path, noCache) {
+  if (!noCache) {
+    const hit = apiCache.get(path);
+    if (hit && Date.now() - hit.t < API_CACHE_MS) return hit.data;
+  }
   const token = await getToken();
   const res = await fetch(proxied("https://api.ebay.com" + path), {
     headers: {
@@ -132,7 +141,12 @@ async function ebayGET(path) {
   if (res.status === 401) { localStorage.removeItem(K.token); throw new Error("BAD_KEYS"); }
   if (res.status === 429) throw new Error("RATE_LIMIT");
   if (!res.ok) throw new Error("API_" + res.status);
-  return res.json();
+  const data = await res.json();
+  if (!noCache) {
+    apiCache.set(path, { t: Date.now(), data });
+    if (apiCache.size > 60) apiCache.delete(apiCache.keys().next().value); // oldest out
+  }
+  return data;
 }
 
 function friendlyError(e) {
@@ -368,7 +382,8 @@ function renderResults() {
     strip.innerHTML =
       `<span>Market read:</span> <b>${money(market.median, market.currency)}</b> <span class="dim">median · typical ${money(market.p25, market.currency)}–${money(market.p75, market.currency)} · ${market.count} comparables</span>` +
       `<span class="flag">${hotCount > 0 ? `🔥 ${hotCount} flagged below ${money(dealLine, market.currency)}` : `deals flag below ${money(dealLine, market.currency)}`}</span>` +
-      `<span class="dim">${shown} · † total excludes unknown shipping</span>`;
+      `<span class="dim">${shown} · † total excludes unknown shipping</span>` +
+      `<button class="strip-btn" id="mkAlert" title="Save a deal alert for this search">🔔 alert me on new deals</button>`;
     strip.hidden = false;
   } else {
     strip.innerHTML = results.length
@@ -481,7 +496,15 @@ $$(".eg").forEach((b) => b.addEventListener("click", () => { $("#q").value = b.d
    WATCHLIST
    ============================================================ */
 function getWatch() { return lsGet(K.watch, []); }
-function isWatched(id) { return getWatch().some((w) => w.id === id); }
+
+// isWatched runs once per rendered card — memoize instead of re-parsing
+// localStorage 60+ times per render
+let _watchIds = null;
+function watchIdsInvalidate() { _watchIds = null; }
+function isWatched(id) {
+  if (!_watchIds) _watchIds = new Set(getWatch().map((w) => w.id));
+  return _watchIds.has(id);
+}
 
 function toggleWatch(id) {
   let list = getWatch();
@@ -494,6 +517,7 @@ function toggleWatch(id) {
     if (list.length > 60) list = list.slice(0, 60);
   }
   lsSet(K.watch, list);
+  watchIdsInvalidate();
   updateWatchCount();
   renderWatch();
   // refresh any matching button in results
@@ -507,6 +531,10 @@ function toggleWatch(id) {
 document.addEventListener("click", (e) => {
   const h = e.target.closest("[data-hide]");
   if (h) { hideListing(h.dataset.hide); return; }
+  const ar = e.target.closest("[data-runalert]");
+  if (ar) { runAlertSearch(ar.dataset.runalert); return; }
+  const ad = e.target.closest("[data-delalert]");
+  if (ad) { deleteAlert(ad.dataset.delalert); return; }
   const w = e.target.closest("[data-watch]");
   if (w) toggleWatch(w.dataset.watch);
 });
@@ -577,7 +605,7 @@ async function refreshWatchPrices(auto) {
     while (queue.length && !fatal) {
       const w = queue.shift();
       try {
-        const it = await ebayGET("/buy/browse/v1/item/" + encodeURIComponent(w.id));
+        const it = await ebayGET("/buy/browse/v1/item/" + encodeURIComponent(w.id), true); // always live, never cached
         const fresh = normalize({ ...it, itemId: w.id, itemWebUrl: it.itemWebUrl || w.url });
         const prev = w.lastTotal != null ? w.lastTotal : w.savedTotal;
         w.lastTotal = fresh.total != null ? fresh.total : w.lastTotal;
@@ -614,7 +642,10 @@ async function refreshWatchPrices(auto) {
   notifyDrops(drops);
 }
 
-$("#refreshWatch").addEventListener("click", () => refreshWatchPrices(false));
+$("#refreshWatch").addEventListener("click", async () => {
+  await refreshWatchPrices(false);
+  await checkDealAlerts(false);
+});
 
 /* ---------- price-drop notifications ---------- */
 let notifyOn = lsGet(K.notify, false);
@@ -639,15 +670,18 @@ $("#notifyBtn").addEventListener("click", async () => {
     : "Price alerts off.", "ok");
 });
 
-function notifyDrops(drops) {
-  if (!drops.length || !notifyOn) return;
+function pushNote(title, lines, tag) {
+  if (!lines.length || !notifyOn) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   try {
-    new Notification(`Tokubai — ${drops.length} price drop${drops.length === 1 ? "" : "s"} 🔻`, {
-      body: drops.slice(0, 4).join("\n") + (drops.length > 4 ? `\n…and ${drops.length - 4} more` : ""),
-      tag: "tokubai-drops", // replaces the previous alert instead of stacking
+    new Notification(title, {
+      body: lines.slice(0, 4).join("\n") + (lines.length > 4 ? `\n…and ${lines.length - 4} more` : ""),
+      tag, // replaces the previous note of this kind instead of stacking
     });
-  } catch { /* some platforms need a service worker for this — alert shown in-app anyway */ }
+  } catch { /* some platforms need a service worker for this — shown in-app anyway */ }
+}
+function notifyDrops(drops) {
+  pushNote(`Tokubai — ${drops.length} price drop${drops.length === 1 ? "" : "s"} 🔻`, drops, "tokubai-drops");
 }
 
 /* ---------- auto-refresh ---------- */
@@ -658,8 +692,9 @@ function setupAutoRefresh() {
   const mins = parseInt(lsGet(K.auto, "0"), 10) || 0;
   $("#autoRefresh").value = String(mins);
   if (mins > 0) {
-    autoTimer = setInterval(() => {
-      if (getWatch().some((w) => !w.ended)) refreshWatchPrices(true);
+    autoTimer = setInterval(async () => {
+      if (getWatch().some((w) => !w.ended)) await refreshWatchPrices(true);
+      checkDealAlerts(true);
     }, mins * 60 * 1000);
   }
 }
@@ -679,10 +714,122 @@ $("#clearEnded").addEventListener("click", () => {
   const removed = list.length - keep.length;
   if (!removed) { showWatchStatus("No ended listings to remove — refresh prices first to detect them.", ""); return; }
   lsSet(K.watch, keep);
+  watchIdsInvalidate();
   updateWatchCount();
   renderWatch();
   showWatchStatus(`Removed ${removed} ended listing${removed === 1 ? "" : "s"}.`, "ok");
 });
+
+/* ============================================================
+   DEAL ALERTS — watch a search, get pinged under your price
+   ============================================================ */
+let isCheckingAlerts = false;
+
+function getAlerts() { return lsGet(K.alerts, []); }
+
+function renderAlerts() {
+  const alerts = getAlerts();
+  $("#alertsBox").hidden = alerts.length === 0;
+  $("#alertRows").innerHTML = alerts.map((a) => `
+    <div class="alert-row">
+      <button class="alert-run" data-runalert="${esc(a.id)}" title="Run this search now, newest first">🔔 <b>${esc(a.q)}</b> — at or under ${money(a.target, a.currency)}</button>
+      <span class="alert-meta">${a.lastRunAt ? `checked ${timeAgo(a.lastRunAt)}` : "not checked yet"}${a.hits ? ` · ${a.hits} found so far` : ""}</span>
+      <button class="alert-del" data-delalert="${esc(a.id)}" aria-label="Delete this alert">✕</button>
+    </div>`).join("");
+}
+
+function createAlertFromScan() {
+  if (!lastQuery) return;
+  const cur = market ? market.currency : marketCurrency();
+  const suggested = market ? Math.round(market.median * 0.75) : parseFloat($("#fMax").value) || "";
+  const raw = prompt(
+    `Alert when a newly-listed “${lastQuery.q}” totals at or under… (${cur})` +
+    (market ? `\nMarket median is ${money(market.median, cur)} — a good target sits below it.` : ""),
+    suggested
+  );
+  if (raw == null) return; // cancelled
+  const target = parseFloat(raw);
+  if (isNaN(target) || target <= 0) { showStatus("Alert not saved — enter a plain number, like 250.", "err"); return; }
+
+  const a = { id: String(Date.now()), q: lastQuery.q, target, currency: cur, createdAt: Date.now(), lastRunAt: null, seen: [], hits: 0 };
+  const alerts = [a, ...getAlerts().filter((x) => x.q.toLowerCase() !== a.q.toLowerCase())].slice(0, 20);
+  lsSet(K.alerts, alerts);
+  renderAlerts();
+  showStatus(
+    `Alert saved — new “${a.q}” listings at ${money(target, cur)} or less get flagged on every refresh. Manage alerts in the Watchlist tab.` +
+    (notifyOn ? "" : " Turn on 🔔 Alerts there for desktop pings."), "ok");
+  // seed with what's listed right now, so only genuinely NEW listings ping
+  checkAlert(a, true).then(() => { lsSet(K.alerts, alerts); renderAlerts(); }).catch(() => { /* seeds on the next check instead */ });
+}
+
+async function checkAlert(a, seed) {
+  const p = new URLSearchParams();
+  p.set("q", a.q);
+  p.set("limit", "50");
+  p.set("sort", "newlyListed");
+  p.set("filter", `price:[..${a.target}],priceCurrency:${a.currency}`);
+  const data = await ebayGET("/buy/browse/v1/item_summary/search?" + p.toString(), true);
+  const items = (data.itemSummaries || []).map(normalize).filter((x) => x.price != null);
+  const seen = new Set(a.seen || []);
+  const matches = [];
+  for (const x of items) {
+    const total = x.shippingKnown ? x.total : x.price; // shipping unknown → judge by item price
+    if (total == null || total > a.target) continue;
+    if (seen.has(x.id)) continue;
+    seen.add(x.id);
+    if (!seed) matches.push(x);
+  }
+  a.seen = Array.from(seen).slice(-400);
+  a.lastRunAt = Date.now();
+  if (!seed && matches.length) a.hits = (a.hits || 0) + matches.length;
+  return matches;
+}
+
+async function checkDealAlerts(auto) {
+  if (isCheckingAlerts) return;
+  const alerts = getAlerts();
+  if (!alerts.length || !settingsReady()) return;
+  isCheckingAlerts = true;
+  if (!auto) showWatchStatus(`Checking ${alerts.length} deal alert${alerts.length === 1 ? "" : "s"}…`, "busy");
+  const found = [];
+  for (const a of alerts) {
+    try {
+      (await checkAlert(a, false)).forEach((x) => found.push({ a, x }));
+    } catch (err) {
+      const m = String(err && err.message || "");
+      if (m === "RATE_LIMIT" || m === "BAD_KEYS" || m === "PROXY_DOWN") break; // fatal — stop here
+    }
+  }
+  lsSet(K.alerts, alerts);
+  renderAlerts();
+  isCheckingAlerts = false;
+  if (found.length) {
+    const lines = found.map(({ a, x }) =>
+      `${x.title.length > 44 ? x.title.slice(0, 44) + "…" : x.title} — ${money(x.shippingKnown ? x.total : x.price, x.currency)} (target ${money(a.target, a.currency)})`);
+    showWatchStatus(`🔔 ${found.length} new listing${found.length === 1 ? "" : "s"} under target! Click the alert to see them, newest first.`, "ok");
+    pushNote(`Tokubai — ${found.length} new deal${found.length === 1 ? "" : "s"} under your target 🔔`, lines, "tokubai-alerts");
+  } else if (!auto && !getWatch().length) {
+    showWatchStatus("Alerts checked — nothing new under target yet.", "ok");
+  }
+}
+
+function runAlertSearch(id) {
+  const a = getAlerts().find((x) => x.id === id);
+  if (!a) return;
+  $("#q").value = a.q;
+  $("#fMax").value = a.target;
+  $("#fSort").value = "newest";
+  switchTab("search");
+  runScan(a.q, false, true);
+}
+
+function deleteAlert(id) {
+  lsSet(K.alerts, getAlerts().filter((x) => x.id !== id));
+  renderAlerts();
+  showWatchStatus("Alert deleted.", "ok");
+}
+
+$("#marketStrip").addEventListener("click", (e) => { if (e.target.closest("#mkAlert")) createAlertFromScan(); });
 
 /* ============================================================
    CSV EXPORT
@@ -759,7 +906,7 @@ $("#themeBtn").addEventListener("click", () => {
 $("#exportData").addEventListener("click", () => {
   const payload = {
     app: "tokubai", version: 1, exportedAt: new Date().toISOString(),
-    settings, watch: getWatch(), recent: lsGet(K.recent, []), hidden: getHidden(),
+    settings, watch: getWatch(), recent: lsGet(K.recent, []), hidden: getHidden(), alerts: getAlerts(),
   };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
@@ -782,16 +929,18 @@ $("#importFile").addEventListener("change", async (e) => {
       lsSet(K.settings, settings);
       localStorage.removeItem(K.token);
     }
-    if (Array.isArray(data.watch)) lsSet(K.watch, data.watch);
+    if (Array.isArray(data.watch)) { lsSet(K.watch, data.watch); watchIdsInvalidate(); }
     if (Array.isArray(data.recent)) lsSet(K.recent, data.recent);
     if (Array.isArray(data.hidden)) lsSet(K.hidden, data.hidden);
+    if (Array.isArray(data.alerts)) lsSet(K.alerts, data.alerts);
     loadSettingsForm();
     renderRecent();
     updateWatchCount();
     renderWatch();
     updateHiddenCount();
+    renderAlerts();
     $("#setupNudge").hidden = settingsReady();
-    setInlineStatus("Backup imported ✓ — settings, watchlist, and recents restored.", "ok");
+    setInlineStatus("Backup imported ✓ — settings, watchlist, alerts, and recents restored.", "ok");
   } catch (err) {
     setInlineStatus("Import failed — " + (err && err.message ? err.message : "invalid file") + ".", "err");
   }
@@ -809,7 +958,7 @@ function switchTab(name) {
   $("#tab-search").hidden = name !== "search";
   $("#tab-watch").hidden = name !== "watch";
   $("#tab-settings").hidden = name !== "settings";
-  if (name === "watch") renderWatch();
+  if (name === "watch") { renderWatch(); renderAlerts(); }
   if (name === "settings") loadSettingsForm();
 }
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
@@ -834,6 +983,7 @@ renderRecent();
 updateWatchCount();
 renderWatch();
 updateHiddenCount();
+renderAlerts();
 paintNotifyBtn();
 setupAutoRefresh();
 $("#setupNudge").hidden = settingsReady();

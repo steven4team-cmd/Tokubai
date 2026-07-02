@@ -184,6 +184,33 @@ a { color: inherit; }
 .market b { font-family: var(--mono); font-weight: 600; }
 .market .flag { color: var(--red); font-weight: 600; }
 .market .dim { color: var(--muted); font-size: 13px; }
+.strip-btn {
+  background: var(--chip); border: 1px solid var(--border-strong); border-radius: 999px;
+  padding: 4px 12px; font-size: 12.5px; font-weight: 600; color: var(--ink);
+  margin-left: auto; transition: border-color .12s, color .12s;
+}
+.strip-btn:hover { border-color: var(--red); color: var(--red); }
+
+/* ---------- deal alerts ---------- */
+.alerts {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--red); border-radius: var(--r);
+  padding: 14px 18px; margin-bottom: 20px; box-shadow: var(--shadow);
+}
+.alerts-h { font-family: var(--display); font-weight: 800; letter-spacing: -.02em; font-size: 17px; margin: 0 0 2px; }
+.alerts-sub { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); }
+.alert-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.alert-row:first-child { border-top: 0; }
+.alert-run { background: none; border: none; padding: 0; font: 14px var(--body); color: var(--ink); text-align: left; }
+.alert-run b { color: var(--red); }
+.alert-run:hover b { text-decoration: underline; text-underline-offset: 2px; }
+.alert-meta { font: 12px var(--mono); color: var(--faint); flex: 1; }
+.alert-del {
+  background: none; border: 1px solid var(--border-strong); border-radius: 7px;
+  width: 24px; height: 24px; display: grid; place-items: center;
+  color: var(--muted); font-size: 12px; line-height: 1;
+}
+.alert-del:hover { color: var(--bad); border-color: var(--bad); }
 
 /* ---------- status & empty ---------- */
 .status {

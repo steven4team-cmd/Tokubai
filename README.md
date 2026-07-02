@@ -43,6 +43,7 @@ Browsers block direct calls to eBay's API, so Tokubai needs a tiny relay you own
 - **Deal score** — each listing is scored against the market median built from comparable Buy It Now listings (auctions are excluded from the read because bids sit low until the end).
 - **Profit estimate** — median resale minus your fee % and outbound shipping (set in Settings), minus the buy price.
 - **Watchlist** — track listings, re-check all prices in parallel, see what moved, get **desktop notifications** on price drops, auto-refresh on a timer while the tab is open.
+- **Deal alerts** — save any search with a target price (suggested from the market read); every refresh scans the *newest* listings for that query and pings you when something lists at or under your target. Manage alerts in the Watchlist tab.
 - **Filters** — min/max price, category, condition, listing type; search supports `under $300` phrasing and eBay's `-word` exclusions (e.g. `iphone 13 -cracked -parts`).
 - **Hide listings** — ✕ on any card removes junk from all future scans.
 - **CSV export** — results and watchlist, with scores and profit columns.
