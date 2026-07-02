@@ -19,11 +19,14 @@
       <svg class="brand-tag" viewBox="0 0 32 32" aria-hidden="true"><path d="M4 14 14 4h10a4 4 0 0 1 4 4v10L18 28a3 3 0 0 1-4.2 0L4 18.2A3 3 0 0 1 4 14Z"/><circle cx="22" cy="10" r="2.4" class="hole"/></svg>
       <span>Tokubai</span>
     </a>
-    <nav class="tabs" role="tablist" aria-label="Sections">
-      <button class="tab on" data-tab="search" role="tab" aria-selected="true">Scan</button>
-      <button class="tab" data-tab="watch" role="tab" aria-selected="false">Watchlist <span class="count" id="watchCount" hidden>0</span></button>
-      <button class="tab" data-tab="settings" role="tab" aria-selected="false">Settings</button>
-    </nav>
+    <div class="top-actions">
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <button class="tab on" data-tab="search" role="tab" aria-selected="true">Scan</button>
+        <button class="tab" data-tab="watch" role="tab" aria-selected="false">Watchlist <span class="count" id="watchCount" hidden>0</span></button>
+        <button class="tab" data-tab="settings" role="tab" aria-selected="false">Settings</button>
+      </nav>
+      <button id="themeBtn" class="theme-btn" title="Theme: auto" aria-label="Switch theme">&#9681;</button>
+    </div>
   </div>
 </header>
 
@@ -42,6 +45,9 @@
     </div>
 
     <div class="filters" id="filters">
+      <label>Min price
+        <input id="fMin" type="number" min="0" step="1" placeholder="0" />
+      </label>
       <label>Max price
         <input id="fMax" type="number" min="0" step="1" placeholder="any" />
       </label>
@@ -87,7 +93,7 @@
     <div id="marketStrip" class="market" hidden></div>
     <div id="status" class="status" hidden></div>
     <div id="results" class="grid" aria-live="polite"></div>
-    <div class="more-row"><button id="moreBtn" class="btn ghost" hidden>Load more results</button></div>
+    <div class="more-row"><button id="moreBtn" class="btn ghost" hidden>Load more results</button><button id="exportBtn" class="btn ghost" hidden>&#8681; Export CSV</button></div>
 
     <div id="emptyState" class="empty">
       <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 14 14 4h10a4 4 0 0 1 4 4v10L18 28a3 3 0 0 1-4.2 0L4 18.2A3 3 0 0 1 4 14Z"/><circle cx="22" cy="10" r="2.4" class="hole"/></svg>
@@ -101,7 +107,20 @@
   <section id="tab-watch" class="pane" role="tabpanel" hidden>
     <div class="pane-head">
       <h1>Watchlist</h1>
-      <button id="refreshWatch" class="btn ghost">&#8635; Refresh prices</button>
+      <div class="pane-head-actions">
+        <label class="auto-label">Auto
+          <select id="autoRefresh" aria-label="Auto-refresh interval">
+            <option value="0">off</option>
+            <option value="15">15 min</option>
+            <option value="30">30 min</option>
+            <option value="60">60 min</option>
+          </select>
+        </label>
+        <button id="notifyBtn" class="btn ghost">&#128277; Alerts off</button>
+        <button id="clearEnded" class="btn ghost">Remove ended</button>
+        <button id="exportWatch" class="btn ghost">&#8681; Export CSV</button>
+        <button id="refreshWatch" class="btn ghost">&#8635; Refresh prices</button>
+      </div>
     </div>
     <div id="watchStatus" class="status" hidden></div>
     <div id="watchGrid" class="grid"></div>
@@ -146,6 +165,17 @@
       <label>Outbound shipping &amp; supplies <span class="hint">(flat cost per flip, in your currency)</span>
         <input id="sShipOut" type="number" min="0" step="0.5" />
       </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Your data</legend>
+      <p class="hint-block">Everything lives in this browser only. Back it up before clearing site data or switching machines &mdash; the backup file includes your API keys, so keep it private.</p>
+      <div class="settings-actions">
+        <button id="exportData" class="btn ghost" type="button">&#8681; Export backup</button>
+        <button id="importData" class="btn ghost" type="button">&#8679; Import backup</button>
+        <button id="clearHidden" class="btn ghost" type="button">Unhide listings (<span id="hiddenCount">0</span>)</button>
+      </div>
+      <input id="importFile" type="file" accept=".json,application/json" hidden />
     </fieldset>
 
     <div class="settings-actions">
