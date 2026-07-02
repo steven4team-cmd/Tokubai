@@ -12,7 +12,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const lsGet = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full/blocked */ } };
 
-const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts" };
+const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers" };
 
 const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5 };
 let settings = { ...DEFAULTS, ...lsGet(K.settings, {}) };
@@ -190,7 +190,8 @@ function buildSearchPath(q, offset) {
   else if (hi != null) filters.push(`price:[..${hi}]`);
   if (lo != null || hi != null) filters.push(`priceCurrency:${marketCurrency()}`);
   const cond = $("#fCond").value;
-  if (cond) filters.push(`conditions:{${cond}}`);
+  // numeric values are eBay condition IDs (1500 open box, 2000s refurb, 7000 parts)
+  if (cond) filters.push(/^\d/.test(cond) ? `conditionIds:{${cond}}` : `conditions:{${cond}}`);
   const type = $("#fType").value;
   if (type) filters.push(`buyingOptions:{${type}}`);
   if (filters.length) p.set("filter", filters.join(","));
@@ -362,7 +363,7 @@ function cardHTML(x, sc, opts) {
       ${sc && sc.profit != null ? `<div class="profit">≈ +${money(sc.profit, x.currency)} est. profit if flipped at market</div>` : ""}
       ${o.hist ? sparkSVG(o.hist) : ""}
       ${o.delta != null ? `<div class="delta ${o.delta < 0 ? "down" : "up"}">${o.delta < 0 ? "▼" : "▲"} ${money(Math.abs(o.delta), x.currency)} since saved</div>` : ""}
-      ${x.seller.name ? `<div class="seller">Seller <b>${esc(x.seller.name)}</b>${x.seller.pct != null ? ` · ${x.seller.pct}% (${x.seller.n.toLocaleString()})` : ""}</div>` : ""}
+      ${x.seller.name ? `<div class="seller">Seller <b>${esc(x.seller.name)}</b>${x.seller.pct != null ? ` · ${x.seller.pct}% (${x.seller.n.toLocaleString()})` : ""}${!o.watch ? ` <button class="block-btn" data-block="${esc(x.seller.name)}" title="Never show this seller again">block</button>` : ""}</div>` : ""}
       ${o.checked ? `<div class="checked">↻ checked ${timeAgo(o.checked)}</div>` : ""}
     </div>
     <div class="actions">
@@ -411,6 +412,25 @@ function renderResults() {
   }
 }
 
+/* ---------- toast (with optional undo) ---------- */
+let toastTimer = null, toastAction = null;
+function toast(msg, actionLabel, onAction) {
+  $("#toastMsg").textContent = msg;
+  const act = $("#toastAct");
+  toastAction = onAction || null;
+  act.hidden = !actionLabel;
+  if (actionLabel) act.textContent = actionLabel;
+  $("#toast").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $("#toast").hidden = true; toastAction = null; }, 6000);
+}
+$("#toastAct").addEventListener("click", () => {
+  clearTimeout(toastTimer);
+  $("#toast").hidden = true;
+  if (toastAction) toastAction();
+  toastAction = null;
+});
+
 /* ---------- status helpers ---------- */
 function showStatus(msg, cls) {
   const el = $("#status");
@@ -456,10 +476,11 @@ async function runScan(rawQuery, append, keepFilters) {
     const data = await ebayGET(buildSearchPath(q, nextOffset));
     const items = (data.itemSummaries || []).map(normalize).filter((x) => x.price != null);
     results = append ? results.concat(items) : items;
-    // de-dupe by id, drop listings the user hid
+    // de-dupe by id, drop hidden listings and blocked sellers
     const seen = new Set();
     const hiddenSet = new Set(getHidden());
-    results = results.filter((x) => !hiddenSet.has(x.id) && (seen.has(x.id) ? false : (seen.add(x.id), true)));
+    const blockedSet = new Set(getBlocked());
+    results = results.filter((x) => !hiddenSet.has(x.id) && !blockedSet.has(x.seller.name) && (seen.has(x.id) ? false : (seen.add(x.id), true)));
 
     market = computeMarket(results);
     lastQuery = { raw: rawQuery, q };
@@ -552,6 +573,8 @@ function toggleWatch(id) {
 document.addEventListener("click", (e) => {
   const h = e.target.closest("[data-hide]");
   if (h) { hideListing(h.dataset.hide); return; }
+  const bl = e.target.closest("[data-block]");
+  if (bl) { blockSeller(bl.dataset.block); return; }
   const ar = e.target.closest("[data-runalert]");
   if (ar) { runAlertSearch(ar.dataset.runalert); return; }
   const ae = e.target.closest("[data-editalert]");
@@ -566,6 +589,7 @@ document.addEventListener("click", (e) => {
 function getHidden() { return lsGet(K.hidden, []); }
 function updateHiddenCount() { const el = $("#hiddenCount"); if (el) el.textContent = getHidden().length; }
 function hideListing(id) {
+  const item = results.find((x) => x.id === id);
   const hidden = getHidden();
   if (!hidden.includes(id)) hidden.unshift(id);
   lsSet(K.hidden, hidden.slice(0, 500));
@@ -573,11 +597,47 @@ function hideListing(id) {
   market = computeMarket(results); // scores shift when a comparable disappears
   renderResults();
   updateHiddenCount();
+  toast("Listing hidden — it won't appear in future scans.", "Undo", () => {
+    lsSet(K.hidden, getHidden().filter((h) => h !== id));
+    updateHiddenCount();
+    if (item && !results.some((x) => x.id === id)) {
+      results.push(item);
+      market = computeMarket(results);
+      renderResults();
+    }
+  });
 }
 $("#clearHidden").addEventListener("click", () => {
   lsSet(K.hidden, []);
   updateHiddenCount();
   setInlineStatus("Hidden listings cleared — they'll show up in scans again.", "ok");
+});
+
+/* ---------- blocked sellers ---------- */
+function getBlocked() { return lsGet(K.sellers, []); }
+function updateBlockedCount() { const el = $("#blockedCount"); if (el) el.textContent = getBlocked().length; }
+function blockSeller(name) {
+  if (!name) return;
+  const b = getBlocked();
+  if (!b.includes(name)) b.unshift(name);
+  lsSet(K.sellers, b.slice(0, 200));
+  const removed = results.filter((x) => x.seller.name === name);
+  results = results.filter((x) => x.seller.name !== name);
+  market = computeMarket(results);
+  renderResults();
+  updateBlockedCount();
+  toast(`Blocked “${name}” — ${removed.length} listing${removed.length === 1 ? "" : "s"} removed from all future scans.`, "Undo", () => {
+    lsSet(K.sellers, getBlocked().filter((s) => s !== name));
+    updateBlockedCount();
+    results = results.concat(removed.filter((r) => !results.some((x) => x.id === r.id)));
+    market = computeMarket(results);
+    renderResults();
+  });
+}
+$("#clearBlocked").addEventListener("click", () => {
+  lsSet(K.sellers, []);
+  updateBlockedCount();
+  setInlineStatus("Blocked sellers cleared — their listings will show up again.", "ok");
 });
 
 function updateWatchCount() {
@@ -608,6 +668,19 @@ function renderWatch() {
       { delta: watchDelta(x), ended: !!x.ended, watch: true, checked: x.checkedAt, hist: x.hist });
   }).join("");
   $("#watchEmpty").hidden = list.length > 0;
+
+  const summary = $("#watchSummary");
+  summary.hidden = list.length === 0;
+  if (list.length) {
+    const live = list.filter((w) => !w.ended);
+    const dropped = list.filter((w) => (watchDelta(w) ?? 0) < 0).length;
+    const buyAll = live.reduce((s, w) => s + (((w.lastTotal != null ? w.lastTotal : w.total)) || 0), 0);
+    const cur = (list[0] && list[0].currency) || marketCurrency();
+    summary.innerHTML =
+      `<b>${list.length}</b> watched · <b>${live.length}</b> live` +
+      ` · <b>${dropped}</b> dropped since saved` +
+      ` · buy-all total <b>${money(buyAll, cur)}</b>`;
+  }
 }
 $("#watchSort").addEventListener("change", renderWatch);
 
@@ -854,7 +927,10 @@ async function checkAlert(a, seed) {
   p.set("sort", "newlyListed");
   p.set("filter", `price:[..${a.target}],priceCurrency:${a.currency}`);
   const data = await ebayGET("/buy/browse/v1/item_summary/search?" + p.toString(), true);
-  const items = (data.itemSummaries || []).map(normalize).filter((x) => x.price != null);
+  const hiddenSet = new Set(getHidden());
+  const blockedSet = new Set(getBlocked());
+  const items = (data.itemSummaries || []).map(normalize)
+    .filter((x) => x.price != null && !hiddenSet.has(x.id) && !blockedSet.has(x.seller.name));
   const seen = new Set(a.seen || []);
   const matches = [];
   for (const x of items) {
@@ -991,7 +1067,7 @@ $("#themeBtn").addEventListener("click", () => {
 $("#exportData").addEventListener("click", () => {
   const payload = {
     app: "tokubai", version: 1, exportedAt: new Date().toISOString(),
-    settings, watch: getWatch(), recent: lsGet(K.recent, []), hidden: getHidden(), alerts: getAlerts(),
+    settings, watch: getWatch(), recent: lsGet(K.recent, []), hidden: getHidden(), alerts: getAlerts(), sellers: getBlocked(),
   };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
@@ -1018,11 +1094,13 @@ $("#importFile").addEventListener("change", async (e) => {
     if (Array.isArray(data.recent)) lsSet(K.recent, data.recent);
     if (Array.isArray(data.hidden)) lsSet(K.hidden, data.hidden);
     if (Array.isArray(data.alerts)) lsSet(K.alerts, data.alerts);
+    if (Array.isArray(data.sellers)) lsSet(K.sellers, data.sellers);
     loadSettingsForm();
     renderRecent();
     updateWatchCount();
     renderWatch();
     updateHiddenCount();
+    updateBlockedCount();
     renderAlerts();
     $("#setupNudge").hidden = settingsReady();
     setInlineStatus("Backup imported ✓ — settings, watchlist, alerts, and recents restored.", "ok");
@@ -1047,7 +1125,7 @@ function switchTab(name) {
   if (name === "settings") loadSettingsForm();
 }
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
-$("#brandHome").addEventListener("click", (e) => { e.preventDefault(); switchTab("search"); });
+$("#brandHome").addEventListener("click", (e) => { e.preventDefault(); switchTab("search"); document.title = "Tokubai — eBay Deal Scanner"; });
 $("#goSettings") && $("#goSettings").addEventListener("click", () => switchTab("settings"));
 
 // press "/" anywhere to jump to the search box
@@ -1068,9 +1146,15 @@ renderRecent();
 updateWatchCount();
 renderWatch();
 updateHiddenCount();
+updateBlockedCount();
 renderAlerts();
 paintNotifyBtn();
 setupAutoRefresh();
+
+// offline shell + install support (https or localhost only)
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+  navigator.serviceWorker.register("sw.js").catch(() => { /* not fatal */ });
+}
 $("#setupNudge").hidden = settingsReady();
 $("#q").focus();
 

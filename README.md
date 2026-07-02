@@ -45,7 +45,8 @@ Browsers block direct calls to eBay's API, so Tokubai needs a tiny relay you own
 - **Watchlist** — track listings, re-check all prices in parallel, see what moved, get **desktop notifications** on price drops, auto-refresh on a timer while the tab is open.
 - **Deal alerts** — save any search with a target price (suggested from the market read); every refresh scans the *newest* listings for that query and pings you when something lists at or under your target. Manage alerts in the Watchlist tab.
 - **Filters** — min/max price, category, condition, listing type; search supports `under $300` phrasing and eBay's `-word` exclusions (e.g. `iphone 13 -cracked -parts`).
-- **Hide listings** — ✕ on any card removes junk from all future scans.
+- **Hide listings & block sellers** — ✕ on any card removes junk from all future scans; "block" next to a seller name bans everything they list. Both undoable, both excluded from alert checks too.
+- **Installable & offline** — install it as an app from the browser menu; the shell loads offline thanks to a service worker.
 - **CSV export** — results and watchlist, with scores and profit columns.
 - **Backup / restore** — everything lives in `localStorage`; export a JSON backup from Settings before clearing browser data.
 - **Shareable searches** — the URL carries your query; bookmark it or send it.

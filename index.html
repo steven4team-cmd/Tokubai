@@ -73,7 +73,10 @@
         <select id="fCond">
           <option value="">Any condition</option>
           <option value="NEW">New</option>
+          <option value="1500">Open box</option>
+          <option value="2000|2010|2020|2030|2500">Refurbished</option>
           <option value="USED">Used</option>
+          <option value="7000">For parts</option>
         </select>
       </label>
       <label>Listing type
@@ -133,6 +136,7 @@
         <button id="refreshWatch" class="btn ghost">&#8635; Refresh prices</button>
       </div>
     </div>
+    <div id="watchSummary" class="watch-summary" hidden></div>
     <div id="watchStatus" class="status" hidden></div>
     <div id="alertsBox" class="alerts" hidden>
       <h2 class="alerts-h">Deal alerts</h2>
@@ -190,6 +194,7 @@
         <button id="exportData" class="btn ghost" type="button">&#8681; Export backup</button>
         <button id="importData" class="btn ghost" type="button">&#8679; Import backup</button>
         <button id="clearHidden" class="btn ghost" type="button">Unhide listings (<span id="hiddenCount">0</span>)</button>
+        <button id="clearBlocked" class="btn ghost" type="button">Unblock sellers (<span id="blockedCount">0</span>)</button>
       </div>
       <input id="importFile" type="file" accept=".json,application/json" hidden />
     </fieldset>
@@ -215,6 +220,8 @@
 <footer class="foot wrap">
   <span>Deal scores and profit figures are estimates from live <em>asking</em> prices, not sold data. Always check sold comps before buying.</span>
 </footer>
+
+<div id="toast" class="toast" hidden><span id="toastMsg"></span><button id="toastAct" class="toast-act" hidden></button></div>
 
 <dialog id="alertDlg">
   <form method="dialog">

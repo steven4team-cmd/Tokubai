@@ -311,6 +311,12 @@ a { color: inherit; }
 .profit { font: 600 12.5px var(--mono); color: var(--red); background: var(--red-soft); border-radius: 7px; padding: 6px 10px; }
 .seller { font-size: 12px; color: var(--muted); }
 .seller b { color: var(--ink); font-weight: 600; }
+.block-btn {
+  background: none; border: none; padding: 0; margin-left: 6px;
+  color: var(--faint); font-size: 11px;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.block-btn:hover { color: var(--bad); }
 .checked { font: 11.5px var(--mono); color: var(--faint); }
 .spark { width: 100%; height: 26px; display: block; }
 .spark polyline { stroke: var(--muted); stroke-width: 1.5; }
@@ -326,7 +332,25 @@ a { color: inherit; }
 
 .more-row { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 24px 0 0; }
 
+/* ---------- toast ---------- */
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 16px;
+  background: var(--ink); color: var(--bg);
+  border-radius: 12px; padding: 11px 18px; font-size: 13.5px;
+  box-shadow: var(--shadow-md); z-index: 90;
+  max-width: min(92vw, 480px);
+}
+.toast-act {
+  background: none; border: none; padding: 0;
+  color: var(--red-dim); font-weight: 700; font-size: 13.5px;
+  white-space: nowrap;
+}
+.toast-act:hover { text-decoration: underline; text-underline-offset: 2px; }
+
 /* ---------- watchlist ---------- */
+.watch-summary { font: 13px var(--mono); color: var(--muted); margin: -6px 0 16px; }
+.watch-summary b { color: var(--ink); font-weight: 600; }
 .pane-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
 .pane-head h1 { margin: 0; }
 .pane-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
