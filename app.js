@@ -14,7 +14,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 
 const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers", snipe: "ff_snipe", insights: "ff_insights" };
 
-const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5 };
+const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5, procPct: 2.9, procFixed: 0.3, promoPct: 0 };
 let settings = { ...DEFAULTS, ...lsGet(K.settings, {}) };
 
 const money = (v, cur) => {
@@ -70,6 +70,9 @@ function loadSettingsForm() {
   $("#sMarket").value = settings.market;
   $("#sFee").value = settings.feePct;
   $("#sShipOut").value = settings.shipOut;
+  $("#sProc").value = settings.procPct;
+  $("#sProcFixed").value = settings.procFixed;
+  $("#sPromo").value = settings.promoPct;
 }
 function readSettingsForm() {
   return {
@@ -79,6 +82,9 @@ function readSettingsForm() {
     market: $("#sMarket").value,
     feePct: clamp(parseFloat($("#sFee").value) || 0, 0, 50),
     shipOut: Math.max(0, parseFloat($("#sShipOut").value) || 0),
+    procPct: clamp(parseFloat($("#sProc").value) || 0, 0, 20),
+    procFixed: Math.max(0, parseFloat($("#sProcFixed").value) || 0),
+    promoPct: clamp(parseFloat($("#sPromo").value) || 0, 0, 30),
   };
 }
 function settingsReady() { return !!(settings.clientId && settings.clientSecret && settings.proxy); }
@@ -197,7 +203,9 @@ function parseQuery(raw) {
 
 function buildSearchPath(q, offset) {
   const p = new URLSearchParams();
-  p.set("q", q);
+  const excl = $("#fExclude").value.trim();
+  const exq = excl ? " " + excl.split(/[,\s]+/).filter(Boolean).map((w) => "-" + w).join(" ") : "";
+  p.set("q", q + exq); // eBay supports -word exclusions natively
   p.set("limit", String(PAGE));
   p.set("offset", String(offset || 0));
 
@@ -219,6 +227,8 @@ function buildSearchPath(q, offset) {
   if (cond) filters.push(/^\d/.test(cond) ? `conditionIds:{${cond}}` : `conditions:{${cond}}`);
   const type = $("#fType").value;
   if (type) filters.push(`buyingOptions:{${type}}`);
+  if ($("#fLoc").value === "domestic") filters.push(`itemLocationCountry:${marketCountry()}`);
+  if ($("#fFreeShip").checked) filters.push("maxDeliveryCost:0");
   if (filters.length) p.set("filter", filters.join(","));
 
   if ($("#fSort").value === "newest") p.set("sort", "newlyListed");
@@ -392,7 +402,9 @@ function cardHTML(x, sc, opts) {
       ${o.checked ? `<div class="checked">↻ checked ${timeAgo(o.checked)}</div>` : ""}
     </div>
     <div class="actions">
-      <a class="btn ghost" href="${esc(x.url)}" target="_blank" rel="noopener">Open listing ↗</a>
+      <a class="btn ghost" href="${esc(x.url)}" target="_blank" rel="noopener" title="Open on eBay">eBay ↗</a>
+      ${!o.watch && x.total != null ? `<button class="btn ghost" data-calc="${esc(x.id)}" title="Profit calculator">$ Profit</button>` : ""}
+      ${o.watch ? `<button class="btn ghost" data-target="${esc(x.id)}" title="Set a snipe target price">🎯 ${o.target != null ? money(o.target, x.currency) : "Target"}</button>` : ""}
       <button class="btn ghost watch-btn${watched ? " on" : ""}" data-watch="${esc(x.id)}">${watched ? "★ Watching" : "☆ Watch"}</button>
     </div>
   </article>`;
@@ -405,12 +417,21 @@ function renderResults() {
   _marketRef = market;
   const grid = $("#results");
   const sortBy = $("#fSort").value;
-  const scored = results.map((x) => ({ x, sc: scoreListing(x, market) }));
+  let scored = results.map((x) => ({ x, sc: scoreListing(x, market) }));
+
+  // view-only filters (applied client-side, results stay intact)
+  const sq = $("#fSeller").value;
+  if (sq) {
+    const [minPct, minN] = sq.split("|").map(Number);
+    scored = scored.filter(({ x }) => x.seller.pct != null && x.seller.pct >= minPct && x.seller.n >= minN);
+  }
+  if ($("#fGems").checked) scored = scored.filter(({ x }) => x.title.length <= 40);
 
   scored.sort((a, b) => {
     if (sortBy === "totalAsc") return (a.x.total ?? 1e12) - (b.x.total ?? 1e12);
     if (sortBy === "newest") return (b.x.listedAt || 0) - (a.x.listedAt || 0);
     if (sortBy === "ending") return (a.x.endAt || 9e15) - (b.x.endAt || 9e15);
+    if (sortBy === "seller") return ((b.x.seller.pct || 0) - (a.x.seller.pct || 0)) || (b.x.seller.n - a.x.seller.n);
     return ((b.sc && b.sc.score) || -1) - ((a.sc && a.sc.score) || -1);
   });
 
@@ -419,7 +440,7 @@ function renderResults() {
   $("#exportBtn").hidden = results.length === 0;
 
   const strip = $("#marketStrip");
-  const shown = `showing ${results.length}${totalAvail > results.length ? ` of ${totalAvail.toLocaleString()}` : ""}`;
+  const shown = `showing ${scored.length}${totalAvail > scored.length ? ` of ${totalAvail.toLocaleString()}` : ""}`;
   if (market) {
     const dealLine = market.median * 0.7;
     const hotCount = scored.filter((s) => s.sc && s.sc.hot).length;
@@ -535,11 +556,13 @@ async function runScan(rawQuery, append, keepFilters) {
 
 $("#searchForm").addEventListener("submit", (e) => { e.preventDefault(); runScan($("#q").value, false); });
 $("#moreBtn").addEventListener("click", () => lastQuery && runScan(lastQuery.raw, true, true));
-["fMin", "fMax", "fCat", "fCond", "fType"].forEach((id) => $("#" + id).addEventListener("change", () => {
+["fMin", "fMax", "fCat", "fCond", "fType", "fExclude", "fLoc", "fFreeShip"].forEach((id) => $("#" + id).addEventListener("change", () => {
   if (!lastQuery) return;
   if (isScanning) { pendingRefine = true; return; } // don't drop it — apply after the scan
   runScan(lastQuery.raw, false, true);
 }));
+// view-only filters — re-render without another API call
+["fSeller", "fGems"].forEach((id) => $("#" + id).addEventListener("change", () => results.length && renderResults()));
 $("#fSort").addEventListener("change", () => results.length && renderResults());
 
 /* ---------- recent searches ---------- */
@@ -601,6 +624,10 @@ document.addEventListener("click", (e) => {
   if (h) { hideListing(h.dataset.hide); return; }
   const bl = e.target.closest("[data-block]");
   if (bl) { blockSeller(bl.dataset.block); return; }
+  const pc = e.target.closest("[data-calc]");
+  if (pc) { openCalc(pc.dataset.calc); return; }
+  const tg = e.target.closest("[data-target]");
+  if (tg) { openTargetDialog(tg.dataset.target); return; }
   const ar = e.target.closest("[data-runalert]");
   if (ar) { runAlertSearch(ar.dataset.runalert); return; }
   const ae = e.target.closest("[data-editalert]");
@@ -944,7 +971,19 @@ alertDlg.addEventListener("close", () => {
   dlgCtx = null;
   if (!ctx || alertDlg.returnValue !== "save") return;
   const target = parseFloat($("#alertTarget").value);
-  if (isNaN(target) || target <= 0) return;
+  if (isNaN(target) || target < 0) return;
+
+  if (ctx.mode === "watchtarget") {
+    const list = getWatch();
+    const w = list.find((x) => x.id === ctx.id);
+    if (!w) return;
+    w.target = target > 0 ? target : undefined; // 0 clears the target
+    lsSet(K.watch, list);
+    renderWatch();
+    showWatchStatus(w.target != null ? `Snipe target set at ${money(w.target, (liveInfo.get(w.id) || {}).currency)}.` : "Snipe target cleared.", "ok");
+    return;
+  }
+  if (target <= 0) return;
 
   if (ctx.mode === "edit") {
     const alerts = getAlerts();
@@ -1062,7 +1101,144 @@ function deleteAlert(id) {
   showWatchStatus("Alert deleted.", "ok");
 }
 
+function openTargetDialog(id) {
+  const w = getWatch().find((x) => x.id === id);
+  if (!w) return;
+  const info = liveInfo.get(id);
+  openAlertDialog({
+    mode: "watchtarget",
+    id,
+    suggested: w.target != null ? w.target : (w.lastTotal != null ? Math.round(w.lastTotal * 0.9 * 100) / 100 : ""),
+    info: `Snipe target for <b>${esc(info ? info.title : "item " + (legacyIdOf(id) || id))}</b>. Auctions ending soon get flagged UNDER TARGET while the bid is at or below this. Enter 0 to clear.`,
+  });
+}
+
 $("#marketStrip").addEventListener("click", (e) => { if (e.target.closest("#mkAlert")) createAlertFromScan(); });
+
+/* ============================================================
+   PROFIT CALCULATOR — per listing, fees + processing + promoted
+   ============================================================ */
+let calcItem = null;
+
+function openCalc(id) {
+  const x = results.find((r) => r.id === id) || liveInfo.get(id);
+  if (!x || x.total == null) return;
+  calcItem = x;
+  $("#calcInfo").innerHTML = `<b>${esc(x.title.length > 60 ? x.title.slice(0, 60) + "…" : x.title)}</b><br>Buy total (item + shipping): <b>${money(x.total, x.currency)}</b>${x.shippingKnown ? "" : " (shipping unknown — item price only)"}`;
+  $("#calcResale").value = market ? market.median.toFixed(2) : "";
+  $("#calcFee").value = settings.feePct;
+  $("#calcProc").value = settings.procPct;
+  $("#calcProcFixed").value = settings.procFixed;
+  $("#calcPromo").value = settings.promoPct;
+  $("#calcShip").value = settings.shipOut;
+  recalcProfit();
+  $("#calcDlg").showModal();
+  $("#calcResale").select();
+}
+
+function recalcProfit() {
+  const x = calcItem;
+  if (!x) return;
+  const resale = parseFloat($("#calcResale").value) || 0;
+  const fvf = resale * ((parseFloat($("#calcFee").value) || 0) / 100);
+  const promo = resale * ((parseFloat($("#calcPromo").value) || 0) / 100);
+  const proc = resale * ((parseFloat($("#calcProc").value) || 0) / 100) + (parseFloat($("#calcProcFixed").value) || 0);
+  const ship = parseFloat($("#calcShip").value) || 0;
+  const profit = resale - fvf - promo - proc - ship - x.total;
+  const roi = x.total > 0 ? (profit / x.total) * 100 : 0;
+  const el = $("#calcProfit");
+  el.textContent = money(profit, x.currency);
+  el.className = "calc-big " + (profit >= 0 ? "pos" : "neg");
+  $("#calcRoi").textContent = (roi >= 0 ? "+" : "") + roi.toFixed(1) + "% ROI";
+  $("#calcBreakdown").textContent =
+    `Fees: ${money(fvf + promo + proc, x.currency)} (FVF ${money(fvf, x.currency)} + promoted ${money(promo, x.currency)} + processing ${money(proc, x.currency)}) · shipping ${money(ship, x.currency)} · cost ${money(x.total, x.currency)}`;
+}
+$("#calcDlg").addEventListener("input", recalcProfit);
+
+/* ============================================================
+   WATCH BY ITEM ID
+   ============================================================ */
+$("#addById").addEventListener("click", () => {
+  if (!settingsReady()) { showWatchStatus("Connect your eBay API key in Settings first.", "err"); return; }
+  $("#idInput").value = "";
+  $("#idDlg").showModal();
+});
+
+$("#idDlg").addEventListener("close", async () => {
+  if ($("#idDlg").returnValue !== "save") return;
+  let id = $("#idInput").value.trim();
+  if (!id) return;
+  if (/^\d+$/.test(id)) id = `v1|${id}|0`; // plain listing number → API format
+  if (isWatched(id)) { showWatchStatus("That item is already on your watchlist.", ""); return; }
+  showWatchStatus("Fetching listing…", "busy");
+  try {
+    const it = await ebayGET("/buy/browse/v1/item/" + encodeURIComponent(id), true);
+    const fresh = normalize({ ...it, itemId: id, itemWebUrl: it.itemWebUrl || itemUrlFromId(id) });
+    liveInfo.set(id, fresh);
+    const list = getWatch();
+    list.unshift({ id, savedAt: Date.now(), savedTotal: fresh.total, lastTotal: fresh.total, checkedAt: Date.now(), hist: fresh.total != null ? [{ t: Date.now(), v: fresh.total }] : [] });
+    lsSet(K.watch, list.slice(0, 60));
+    watchIdsInvalidate();
+    updateWatchCount();
+    renderWatch();
+    showWatchStatus(`Added “${fresh.title.length > 60 ? fresh.title.slice(0, 60) + "…" : fresh.title}” to the watchlist.`, "ok");
+  } catch (e) {
+    const m = String(e && e.message || "");
+    showWatchStatus(m === "API_404" || m === "API_400" ? "No live listing found for that item ID." : friendlyError(e), "err");
+  }
+});
+
+$("#snipeWin").addEventListener("change", (e) => { lsSet(K.snipe, e.target.value); renderSnipe(); });
+
+/* ============================================================
+   MULTI-QUERY DASHBOARD — every deal alert as a live column
+   ============================================================ */
+const dashData = new Map(); // alertId → normalized items (session only — data rule)
+
+function dashColHTML(a, items) {
+  return `<div class="dash-col">
+    <div class="dash-head"><b>${esc(a.q)}</b><span class="dim">target ${money(a.target, a.currency)}</span></div>
+    ${items
+      ? (items.map((x) => {
+          const t = x.shippingKnown ? x.total : x.price;
+          const under = t != null && t <= a.target;
+          return `<a class="dash-row${under ? " under" : ""}" href="${esc(x.url)}" target="_blank" rel="noopener">
+            <span class="dash-title">${esc(x.title)}</span>
+            <span class="dash-price">${money(t, x.currency)}</span>
+            <span class="dash-age">${x.listedAt ? timeAgo(x.listedAt) : ""}</span>
+          </a>`;
+        }).join("") || `<div class="dim dash-none">nothing live right now</div>`)
+      : `<div class="skel dash-skel"></div>`}
+  </div>`;
+}
+
+async function renderDashboard(force) {
+  const alerts = getAlerts();
+  $("#dashEmpty").hidden = alerts.length > 0;
+  const grid = $("#dashGrid");
+  grid.innerHTML = alerts.map((a) => dashColHTML(a, dashData.get(a.id))).join("");
+  if (!alerts.length) return;
+  if (!settingsReady()) { $("#dashStatus").textContent = "Connect your eBay API key in Settings first."; $("#dashStatus").className = "status err"; $("#dashStatus").hidden = false; return; }
+  $("#dashStatus").hidden = true;
+  const hiddenSet = new Set(getHidden());
+  const blockedSet = new Set(getBlocked());
+  for (const a of alerts) {
+    if (!force && dashData.has(a.id)) continue;
+    try {
+      const p = new URLSearchParams({ q: a.q, limit: "12", sort: "newlyListed" });
+      const data = await ebayGET("/buy/browse/v1/item_summary/search?" + p, !!force);
+      dashData.set(a.id, (data.itemSummaries || []).map(normalize)
+        .filter((x) => x.price != null && !hiddenSet.has(x.id) && !blockedSet.has(x.seller.name)));
+      grid.innerHTML = alerts.map((al) => dashColHTML(al, dashData.get(al.id))).join("");
+    } catch (e) {
+      $("#dashStatus").textContent = friendlyError(e);
+      $("#dashStatus").className = "status err";
+      $("#dashStatus").hidden = false;
+      break;
+    }
+  }
+}
+$("#refreshDash").addEventListener("click", () => renderDashboard(true));
 
 /* ============================================================
    CSV EXPORT
@@ -1192,8 +1368,10 @@ function switchTab(name) {
     t.setAttribute("aria-selected", on);
   });
   $("#tab-search").hidden = name !== "search";
+  $("#tab-dash").hidden = name !== "dash";
   $("#tab-watch").hidden = name !== "watch";
   $("#tab-settings").hidden = name !== "settings";
+  if (name === "dash") renderDashboard(false);
   if (name === "watch") {
     renderWatch();
     renderAlerts();
@@ -1206,15 +1384,22 @@ $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.
 $("#brandHome").addEventListener("click", (e) => { e.preventDefault(); switchTab("search"); document.title = "Tokubai — eBay Deal Scanner"; });
 $("#goSettings") && $("#goSettings").addEventListener("click", () => switchTab("settings"));
 
-// press "/" anywhere to jump to the search box
+// keyboard shortcuts: "/" focuses search, "r" re-runs/refreshes the current view
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-  e.preventDefault();
-  switchTab("search");
-  $("#q").focus();
-  $("#q").select();
+  if (e.key === "/") {
+    e.preventDefault();
+    switchTab("search");
+    $("#q").focus();
+    $("#q").select();
+  } else if (e.key === "r") {
+    e.preventDefault();
+    if (!$("#tab-watch").hidden) { refreshWatchPrices(false); checkDealAlerts(false); }
+    else if (!$("#tab-dash").hidden) renderDashboard(true);
+    else if (lastQuery) runScan(lastQuery.raw, false, true);
+  }
 });
 
 /* boot */

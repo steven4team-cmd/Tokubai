@@ -22,6 +22,7 @@
     <div class="top-actions">
       <nav class="tabs" role="tablist" aria-label="Sections">
         <button class="tab on" data-tab="search" role="tab" aria-selected="true">Scan</button>
+        <button class="tab" data-tab="dash" role="tab" aria-selected="false">Dashboard</button>
         <button class="tab" data-tab="watch" role="tab" aria-selected="false">Watchlist <span class="count" id="watchCount" hidden>0</span></button>
         <button class="tab" data-tab="settings" role="tab" aria-selected="false">Settings</button>
       </nav>
@@ -83,12 +84,36 @@
           <option value="AUCTION">Auction only</option>
         </select>
       </label>
+      <label>Location
+        <select id="fLoc">
+          <option value="">Anywhere</option>
+          <option value="domestic">Domestic only</option>
+        </select>
+      </label>
+      <label>Seller quality
+        <select id="fSeller">
+          <option value="">Any seller</option>
+          <option value="98|50">98%+ &middot; 50+ ratings</option>
+          <option value="99|200">99%+ &middot; 200+ ratings</option>
+          <option value="99.5|1000">99.5%+ &middot; 1000+</option>
+        </select>
+      </label>
+      <label>Exclude words
+        <input id="fExclude" type="text" placeholder="broken, parts, as-is" />
+      </label>
+      <label class="check-label">Free shipping
+        <input id="fFreeShip" type="checkbox" />
+      </label>
+      <label class="check-label" title="Only listings with very short titles — often poorly listed and underpriced">Hidden gems
+        <input id="fGems" type="checkbox" />
+      </label>
       <label>Sort by
         <select id="fSort">
           <option value="score">Deal score</option>
           <option value="totalAsc">Total cost: low &rarr; high</option>
           <option value="newest">Newest listed</option>
           <option value="ending">Ending soonest</option>
+          <option value="seller">Seller rating</option>
         </select>
       </label>
     </div>
@@ -103,6 +128,20 @@
       <h2>No scans yet</h2>
       <p>Search anything resellable &mdash; <button class="linklike eg" data-eg="lego death star under $300">lego death star under $300</button>, <button class="linklike eg" data-eg="pokemon cards booster box">pokemon cards booster box</button>, <button class="linklike eg" data-eg="gaming laptop rtx 4070 under $900">gaming laptop rtx 4070</button>.</p>
       <p class="dim" id="setupNudge" hidden>First time here? Open <button class="linklike" id="goSettings">Settings</button> to connect your eBay API key &mdash; takes about five minutes.</p>
+    </div>
+  </section>
+
+  <!-- ============ DASHBOARD ============ -->
+  <section id="tab-dash" class="pane" role="tabpanel" hidden>
+    <div class="pane-head">
+      <h1>Dashboard</h1>
+      <button id="refreshDash" class="btn ghost">&#8635; Refresh all</button>
+    </div>
+    <div id="dashStatus" class="status" hidden></div>
+    <div id="dashGrid" class="dash-grid"></div>
+    <div id="dashEmpty" class="empty" hidden>
+      <h2>No saved searches yet</h2>
+      <p>Each deal alert becomes a live column here. Run a scan, then hit <strong>&#128276; alert me on new deals</strong> in the market strip.</p>
     </div>
   </section>
 
@@ -122,11 +161,14 @@
         <label class="auto-label">Auto
           <select id="autoRefresh" aria-label="Auto-refresh interval">
             <option value="0">off</option>
+            <option value="2">2 min</option>
+            <option value="5">5 min</option>
             <option value="15">15 min</option>
             <option value="30">30 min</option>
             <option value="60">60 min</option>
           </select>
         </label>
+        <button id="addById" class="btn ghost">+ Item ID</button>
         <button id="notifyBtn" class="btn ghost">&#128277; Alerts off</button>
         <button id="clearEnded" class="btn ghost">Remove ended</button>
         <button id="exportWatch" class="btn ghost">&#8681; Export CSV</button>
@@ -135,6 +177,19 @@
     </div>
     <div id="watchSummary" class="watch-summary" hidden></div>
     <div id="watchStatus" class="status" hidden></div>
+    <div id="snipeBox" class="alerts snipe" hidden>
+      <h2 class="alerts-h">&#9201; Auctions ending soon</h2>
+      <p class="alerts-sub">Watched auctions closing within
+        <select id="snipeWin">
+          <option value="15">15 min</option>
+          <option value="30">30 min</option>
+          <option value="60" selected>60 min</option>
+          <option value="120">2 hours</option>
+          <option value="360">6 hours</option>
+        </select>
+        &mdash; bids come from the last refresh. Set a &#127919; target on a card to get the UNDER TARGET flag.</p>
+      <div id="snipeRows"></div>
+    </div>
     <div id="alertsBox" class="alerts" hidden>
       <h2 class="alerts-h">Deal alerts</h2>
       <p class="alerts-sub">Each refresh scans the <strong>newest</strong> eBay listings for these searches and flags anything at or under your target price. Save one from the market strip after any scan.</p>
@@ -182,6 +237,15 @@
       <label>Outbound shipping &amp; supplies <span class="hint">(flat cost per flip, in your currency)</span>
         <input id="sShipOut" type="number" min="0" step="0.5" />
       </label>
+      <label>Payment processing % <span class="hint">(&asymp; 2.9 for managed payments)</span>
+        <input id="sProc" type="number" min="0" max="20" step="0.05" />
+      </label>
+      <label>Processing fixed fee <span class="hint">(&asymp; 0.30 per order)</span>
+        <input id="sProcFixed" type="number" min="0" step="0.01" />
+      </label>
+      <label>Promoted listing % <span class="hint">(0 if you don't promote)</span>
+        <input id="sPromo" type="number" min="0" max="30" step="0.1" />
+      </label>
     </fieldset>
 
     <fieldset>
@@ -225,11 +289,46 @@
     <h3 id="alertDlgTitle">New deal alert</h3>
     <p id="alertDlgInfo" class="dlg-info"></p>
     <label>Alert when a new listing totals at or under
-      <input id="alertTarget" type="number" min="0.01" step="0.01" required inputmode="decimal" />
+      <input id="alertTarget" type="number" min="0" step="0.01" required inputmode="decimal" />
     </label>
     <div class="dlg-actions">
       <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>
       <button value="save" class="btn solid">Save alert</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="calcDlg">
+  <form method="dialog">
+    <h3>Profit calculator</h3>
+    <p class="dlg-info" id="calcInfo"></p>
+    <div class="calc-grid">
+      <label>Resale price <input id="calcResale" type="number" min="0" step="0.01" inputmode="decimal" /></label>
+      <label>Final value fee % <input id="calcFee" type="number" min="0" max="50" step="0.05" /></label>
+      <label>Processing % <input id="calcProc" type="number" min="0" max="20" step="0.05" /></label>
+      <label>Processing fixed <input id="calcProcFixed" type="number" min="0" step="0.01" /></label>
+      <label>Promoted % <input id="calcPromo" type="number" min="0" max="30" step="0.1" /></label>
+      <label>Your shipping <input id="calcShip" type="number" min="0" step="0.5" /></label>
+    </div>
+    <div class="calc-result">
+      <span id="calcProfit" class="calc-big"></span>
+      <span id="calcRoi" class="calc-roi"></span>
+    </div>
+    <p class="dlg-info" id="calcBreakdown"></p>
+    <div class="dlg-actions"><button value="close" class="btn solid">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="idDlg">
+  <form method="dialog">
+    <h3>Watch by item ID</h3>
+    <p class="dlg-info">Paste an eBay item number (the digits in a listing URL) or a full API item ID.</p>
+    <label>Item ID
+      <input id="idInput" type="text" required spellcheck="false" placeholder="e.g. 235401234567" />
+    </label>
+    <div class="dlg-actions">
+      <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>
+      <button value="save" class="btn solid">Add to watchlist</button>
     </div>
   </form>
 </dialog>
