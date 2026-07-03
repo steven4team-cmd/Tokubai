@@ -272,6 +272,19 @@ a { color: inherit; }
 .calc-roi { font-weight: 700; color: var(--muted); }
 #calcDlg { width: min(92vw, 460px); }
 
+/* ---------- sold comps ---------- */
+.below.sold b { color: var(--olive); }
+.comps-link { font-size: 11px; margin-left: 4px; }
+#compsDlg { width: min(92vw, 520px); }
+.comps-row {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: baseline;
+  padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px;
+}
+.comps-row:first-child { border-top: 0; }
+.comps-title { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+.comps-price { font-weight: 700; }
+.comps-date { color: var(--faint); font-size: 12px; }
+
 /* ---------- status & empty ---------- */
 .status {
   background: var(--surface); border: 1px solid var(--border);

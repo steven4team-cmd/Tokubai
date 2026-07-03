@@ -279,6 +279,84 @@ function normalize(it) {
 }
 
 /* ============================================================
+   SOLD COMPS — eBay Marketplace Insights (gated API)
+   Access is probed, never assumed; everything degrades to live
+   asking prices when the keyset isn't approved. Sold data lives
+   in session memory only (data rule).
+   ============================================================ */
+let insightsOK = lsGet(K.insights, null); // null = never probed, true/false = probe verdict
+let soldStats = null; // { median, count, soldTotal, samples } for the current scan
+
+async function probeInsights() {
+  try {
+    await ebayGET("/buy/marketplace_insights/v1_beta/item_sales/search?q=test&limit=1", true);
+    insightsOK = true;
+  } catch (e) {
+    const m = String(e && e.message || "");
+    if (m === "API_403" || m === "API_404") insightsOK = false; // keyset not provisioned
+    else throw e; // proxy/keys/network problem — no verdict
+  }
+  lsSet(K.insights, insightsOK);
+  return insightsOK;
+}
+
+async function fetchSoldStats(q) {
+  if (insightsOK !== true) return null;
+  try {
+    const p = new URLSearchParams({ q, limit: "100" });
+    const data = await ebayGET("/buy/marketplace_insights/v1_beta/item_sales/search?" + p);
+    const sales = data.itemSales || [];
+    const prices = sales
+      .map((s) => s.lastSoldPrice && parseFloat(s.lastSoldPrice.value))
+      .filter((v) => v != null && !isNaN(v))
+      .sort((a, b) => a - b);
+    if (prices.length < 4) return null;
+    const mid = Math.floor(prices.length / 2);
+    const median = prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+    return { median, count: prices.length, soldTotal: data.total || prices.length, samples: sales.slice(0, 10) };
+  } catch (e) {
+    const m = String(e && e.message || "");
+    if (m === "API_403") { insightsOK = false; lsSet(K.insights, false); } // access revoked
+    return null;
+  }
+}
+
+function openComps(id) {
+  const x = results.find((r) => r.id === id);
+  if (!x || !soldStats) return;
+  $("#compsInfo").innerHTML =
+    `<b>${esc(x.title.length > 70 ? x.title.slice(0, 70) + "…" : x.title)}</b><br>` +
+    `Asking <b>${money(x.total, x.currency)}</b> vs sold median <b>${money(soldStats.median, x.currency)}</b> across ${soldStats.count} recent sales.`;
+  $("#compsRows").innerHTML = soldStats.samples.map((s) => {
+    const v = s.lastSoldPrice ? parseFloat(s.lastSoldPrice.value) : null;
+    return `<div class="comps-row">
+      <span class="comps-title">${esc(s.title || "")}</span>
+      <span class="comps-price">${v != null ? money(v, s.lastSoldPrice.currency) : "—"}</span>
+      <span class="comps-date">${s.lastSoldDate ? new Date(s.lastSoldDate).toLocaleDateString() : ""}</span>
+    </div>`;
+  }).join("") || `<div class="dim">No individual comps returned for this query.</div>`;
+  $("#compsDlg").showModal();
+}
+
+$("#checkInsights").addEventListener("click", async () => {
+  const el = $("#insightsStatus");
+  const put = (msg, cls) => { el.textContent = msg; el.className = "status-inline" + (cls ? " " + cls : ""); };
+  settings = readSettingsForm();
+  lsSet(K.settings, settings);
+  if (!settingsReady()) { put("Fill in the eBay API settings above first.", "err"); return; }
+  put("Probing Marketplace Insights…");
+  try {
+    const ok = await probeInsights();
+    put(ok
+      ? "Access confirmed ✓ — deal scores and badges now use real SOLD prices."
+      : "Not enabled on this keyset. Marketplace Insights is limited-release: apply at developer.ebay.com → Application Growth Check (or contact eBay Developer Support) and request the Marketplace Insights API for pricing research. Until then the app scores against live asking prices.",
+      ok ? "ok" : "err");
+  } catch (e) {
+    put(friendlyError(e), "err");
+  }
+});
+
+/* ============================================================
    MARKET READ + DEAL SCORE
    ============================================================ */
 function computeMarket(list) {
@@ -312,21 +390,24 @@ const COND_W = (c) => {
 };
 
 function scoreListing(x, mkt) {
-  if (!mkt || x.total == null) return null;
-  const discount = (mkt.median - x.total) / mkt.median;
+  // real sold prices (Marketplace Insights) beat asking prices when available
+  const ref = soldStats ? soldStats.median : (mkt ? mkt.median : null);
+  const depth = soldStats ? soldStats.count : (mkt ? mkt.count : 0);
+  if (ref == null || x.total == null) return null;
+  const discount = (ref - x.total) / ref;
   const dN = clamp(discount / 0.45, 0, 1);
   const pctN = x.seller.pct != null ? clamp((x.seller.pct - 95) / 5, 0, 1) : 0.4;
   const volN = clamp(x.seller.n / 500, 0, 1);
   const sN = 0.6 * pctN + 0.4 * volN;
   const score = Math.round(100 * (0.62 * dN + 0.22 * sN + 0.16 * COND_W(x.condition)));
   const tier = score >= 78 ? "hot" : score >= 62 ? "great" : score >= 48 ? "good" : "fair";
-  const hot = discount >= 0.3 && mkt.count >= 8;
+  const hot = discount >= 0.3 && depth >= 8;
   let profit = null;
-  if (mkt.count >= 8 && !x.isAuction) {
-    const net = mkt.median * (1 - settings.feePct / 100) - settings.shipOut - x.total;
+  if (depth >= 8 && !x.isAuction) {
+    const net = ref * (1 - settings.feePct / 100) - settings.shipOut - x.total;
     if (net > 0) profit = net;
   }
-  return { score, tier, hot, discount, profit };
+  return { score, tier, hot, discount, profit, soldBased: !!soldStats };
 }
 
 /* ============================================================
@@ -394,7 +475,9 @@ function cardHTML(x, sc, opts) {
         <div class="row"><span class="lbl">shipping</span><span class="dots"></span><span class="val">${x.shippingKnown ? (x.shipping === 0 ? "FREE" : money(x.shipping, x.currency)) : "varies"}</span></div>
         <div class="row total"><span class="lbl">total</span><span class="dots"></span><span class="val">${money(x.total, x.currency)}${x.shippingKnown ? "" : "†"}</span></div>
       </div>
-      ${sc && sc.discount > 0.02 ? `<div class="below"><b>${Math.round(sc.discount * 100)}% below</b> market median ${money(marketRef().median, x.currency)}</div>` : ""}
+      ${sc && sc.discount > 0.02 ? (sc.soldBased
+        ? `<div class="below sold"><b>${Math.round(sc.discount * 100)}% below</b> SOLD median ${money(soldStats.median, x.currency)} <button class="linklike comps-link" data-comps="${esc(x.id)}">comps</button></div>`
+        : `<div class="below"><b>${Math.round(sc.discount * 100)}% below</b> market median ${money(marketRef().median, x.currency)}</div>`) : ""}
       ${sc && sc.profit != null ? `<div class="profit">≈ +${money(sc.profit, x.currency)} est. profit if flipped at market</div>` : ""}
       ${o.hist ? sparkSVG(o.hist) : ""}
       ${o.delta != null ? `<div class="delta ${o.delta < 0 ? "down" : "up"}">${o.delta < 0 ? "▼" : "▲"} ${money(Math.abs(o.delta), x.currency)} since saved</div>` : ""}
@@ -441,12 +524,24 @@ function renderResults() {
 
   const strip = $("#marketStrip");
   const shown = `showing ${scored.length}${totalAvail > scored.length ? ` of ${totalAvail.toLocaleString()}` : ""}`;
-  if (market) {
-    const dealLine = market.median * 0.7;
+  if (market || soldStats) {
+    const cur = (market && market.currency) || (results[0] && results[0].currency) || marketCurrency();
+    const refMedian = soldStats ? soldStats.median : market.median;
+    const dealLine = refMedian * 0.7;
     const hotCount = scored.filter((s) => s.sc && s.sc.hot).length;
+    // sell-through: recent sales vs live supply — rough demand read
+    const st = soldStats && totalAvail ? soldStats.soldTotal / (soldStats.soldTotal + totalAvail) : null;
     strip.innerHTML =
-      `<span>Market read:</span> <b>${money(market.median, market.currency)}</b> <span class="dim">median · typical ${money(market.p25, market.currency)}–${money(market.p75, market.currency)} · ${market.count} comparables</span>` +
-      `<span class="flag">${hotCount > 0 ? `🔥 ${hotCount} flagged below ${money(dealLine, market.currency)}` : `deals flag below ${money(dealLine, market.currency)}`}</span>` +
+      (soldStats
+        ? `<span>SOLD median:</span> <b>${money(soldStats.median, cur)}</b> <span class="dim">${soldStats.count} recent sales</span>`
+        : "") +
+      (market
+        ? `<span>${soldStats ? "Asking" : "Market read"}:</span> <b>${money(market.median, cur)}</b> <span class="dim">median · typical ${money(market.p25, cur)}–${money(market.p75, cur)} · ${market.count} comparables</span>`
+        : "") +
+      (st != null
+        ? `<span class="${st > 0.55 ? "flag" : "dim"}">sell-through ${(st * 100).toFixed(0)}%${st > 0.55 ? " · moves fast 🔥" : st < 0.3 ? " · slow mover 🐌" : ""}</span>`
+        : "") +
+      `<span class="flag">${hotCount > 0 ? `🔥 ${hotCount} flagged below ${money(dealLine, cur)}` : `deals flag below ${money(dealLine, cur)}`}</span>` +
       `<span class="dim">${shown} · † total excludes unknown shipping</span>` +
       `<button class="strip-btn" id="mkAlert" title="Save a deal alert for this search">🔔 alert me on new deals</button>`;
     strip.hidden = false;
@@ -531,6 +626,7 @@ async function runScan(rawQuery, append, keepFilters) {
     market = computeMarket(results);
     lastQuery = { raw: rawQuery, q };
     totalAvail = data.total || 0;
+    if (!append) soldStats = await fetchSoldStats(q); // null unless Insights access confirmed
     nextOffset += PAGE;
     $("#moreBtn").hidden = !(data.total && nextOffset < Math.min(data.total, 600));
 
@@ -626,6 +722,8 @@ document.addEventListener("click", (e) => {
   if (bl) { blockSeller(bl.dataset.block); return; }
   const pc = e.target.closest("[data-calc]");
   if (pc) { openCalc(pc.dataset.calc); return; }
+  const cp = e.target.closest("[data-comps]");
+  if (cp) { openComps(cp.dataset.comps); return; }
   const tg = e.target.closest("[data-target]");
   if (tg) { openTargetDialog(tg.dataset.target); return; }
   const ar = e.target.closest("[data-runalert]");

@@ -230,6 +230,15 @@
     </fieldset>
 
     <fieldset>
+      <legend>Sold data (Marketplace Insights)</legend>
+      <p class="hint-block">Sold-comp valuation uses eBay's gated <strong>Marketplace Insights API</strong>. Check whether your Production keyset has it &mdash; if not, deal scores quietly fall back to live asking prices.</p>
+      <div class="settings-actions">
+        <button id="checkInsights" class="btn ghost" type="button">Check sold-data access</button>
+        <span id="insightsStatus" class="status-inline" role="status"></span>
+      </div>
+    </fieldset>
+
+    <fieldset>
       <legend>Profit math</legend>
       <label>Selling fees <span class="hint">(% taken when you resell &mdash; eBay final value fee &asymp; 13.25)</span>
         <input id="sFee" type="number" min="0" max="50" step="0.05" />
@@ -316,6 +325,15 @@
     </div>
     <p class="dlg-info" id="calcBreakdown"></p>
     <div class="dlg-actions"><button value="close" class="btn solid">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="compsDlg">
+  <form method="dialog">
+    <h3>Recent sold comps</h3>
+    <p class="dlg-info" id="compsInfo"></p>
+    <div id="compsRows"></div>
+    <div class="dlg-actions"><button value="close" class="btn solid">Close</button></div>
   </form>
 </dialog>
 

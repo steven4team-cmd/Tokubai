@@ -44,7 +44,11 @@ Browsers block direct calls to eBay's API, so Tokubai needs a tiny relay you own
 - **Profit estimate** — median resale minus your fee % and outbound shipping (set in Settings), minus the buy price.
 - **Watchlist** — track listings, re-check all prices in parallel, see what moved, get **desktop notifications** on price drops, auto-refresh on a timer while the tab is open.
 - **Deal alerts** — save any search with a target price (suggested from the market read); every refresh scans the *newest* listings for that query and pings you when something lists at or under your target. Manage alerts in the Watchlist tab.
-- **Filters** — min/max price, category, condition, listing type; search supports `under $300` phrasing and eBay's `-word` exclusions (e.g. `iphone 13 -cracked -parts`).
+- **Multi-query dashboard** — every deal alert renders as a live newest-first column on one screen; under-target rows are highlighted.
+- **Auction sniping** — set a 🎯 target on any watched auction; the "ending soon" panel surfaces auctions closing within your window with bids still under target. Add items directly by item ID.
+- **Profit calculator** — per listing: target resale price, final value fee, payment processing (% + fixed), promoted-listing %, and your shipping — live profit and ROI with a fee breakdown.
+- **Sold comps (optional)** — with eBay's gated Marketplace Insights API enabled on your keyset, scores and badges switch from asking prices to real SOLD medians, plus a sell-through (moves fast/slow) read and side-by-side sold-comp compare. Settings → "Check sold-data access" probes your keyset; without access everything degrades to asking prices.
+- **Filters** — min/max price, category, condition (incl. open box / refurbished / for parts), BIN/auction, item location (domestic-only), free-shipping-only, seller quality (min feedback % + volume), exclude-keywords, and a "hidden gems" toggle (short-titled listings that are often underpriced). Search supports `under $300` phrasing and eBay's `-word` exclusions.
 - **Hide listings & block sellers** — ✕ on any card removes junk from all future scans; "block" next to a seller name bans everything they list. Both undoable, both excluded from alert checks too.
 - **Installable & offline** — install it as an app from the browser menu; the shell loads offline thanks to a service worker.
 - **CSV export** — results and watchlist, with scores and profit columns.
@@ -73,6 +77,8 @@ const { total, items } = await searchItems("gaming laptop", {
 - `EBAY_BASE_URL` in `.env` switches between production (`https://api.ebay.com`) and sandbox (`https://api.sandbox.ebay.com`).
 - Credentials live only in `.env` (gitignored); `.env.example` has the placeholders.
 
-## Privacy
+## Privacy & data rule
 
 Keys and data are stored in your browser's `localStorage` only. Calls go browser → your worker → eBay. The worker forwards only to `api.ebay.com` and stores nothing.
+
+**eBay listing data is never persisted.** Watchlists, alerts, and saved searches store only your query text/filters, bare eBay item IDs, and prices you observed. Titles, images, sellers, and other listing content are re-fetched live on every view and held in memory only.
