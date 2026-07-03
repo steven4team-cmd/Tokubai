@@ -1,0 +1,11 @@
+{
+  "name": "tokubai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "eBay deal scanner — browser app plus a Node client for the eBay Browse API",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "search": "node ebay-client.js"
+  }
+}

@@ -52,6 +52,27 @@ Browsers block direct calls to eBay's API, so Tokubai needs a tiny relay you own
 - **Shareable searches** — the URL carries your query; bookmark it or send it.
 - Theme toggle (auto / light / dark), `/` to focus search.
 
+## Node client (server-side)
+
+[`ebay-client.js`](ebay-client.js) is a zero-dependency Node 18+ module for calling the Browse API from scripts or a backend — same API, no browser and no proxy needed.
+
+```bash
+cp .env.example .env     # then fill in your keyset — .env is gitignored
+node ebay-client.js "lego death star" 300
+```
+
+```js
+import { searchItems } from "./ebay-client.js";
+const { total, items } = await searchItems("gaming laptop", {
+  minPrice: 200, maxPrice: 900, condition: "USED", sort: "newlyListed",
+});
+// items: [{ id, title, price: { value, currency }, condition, url, imageUrl }]
+```
+
+- OAuth client-credentials flow with the token cached and reused until ~5 minutes before its 2-hour expiry; concurrent callers share one token request, and a 401 triggers exactly one fresh-token retry.
+- `EBAY_BASE_URL` in `.env` switches between production (`https://api.ebay.com`) and sandbox (`https://api.sandbox.ebay.com`).
+- Credentials live only in `.env` (gitignored); `.env.example` has the placeholders.
+
 ## Privacy
 
 Keys and data are stored in your browser's `localStorage` only. Calls go browser → your worker → eBay. The worker forwards only to `api.ebay.com` and stores nothing.
