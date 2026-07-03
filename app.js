@@ -12,7 +12,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const lsGet = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full/blocked */ } };
 
-const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers" };
+const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers", snipe: "ff_snipe", insights: "ff_insights" };
 
 const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5 };
 let settings = { ...DEFAULTS, ...lsGet(K.settings, {}) };
@@ -34,6 +34,31 @@ let pendingRefine = false;   // a filter changed mid-scan — re-run when done
 const PAGE = 60;
 const FALLBACK_IMG = "data:image/svg+xml," + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 90"><rect width="120" height="90" fill="#eef1ee"/><path d="M42 48 56 34h14a5 5 0 0 1 5 5v14L61 67a4 4 0 0 1-5.6 0L42 53.6a4 4 0 0 1 0-5.6Z" fill="#c9cfca"/></svg>`);
+
+/* DATA RULE: eBay listing content (titles, images, sellers, conditions, URLs,
+   end times) is NEVER persisted — localStorage holds only query text, bare
+   item IDs, and prices we ourselves observed. Live details stay in this
+   session-only map and vanish when the tab closes. */
+const liveInfo = new Map(); // itemId → freshly fetched listing details
+
+function legacyIdOf(id) {
+  const m = String(id).match(/^v1\|(\d+)\|/);
+  return m ? m[1] : (/^\d+$/.test(String(id)) ? String(id) : null);
+}
+function itemUrlFromId(id) {
+  const l = legacyIdOf(id);
+  return l ? "https://www.ebay.com/itm/" + l : "#";
+}
+function stripWatchItem(w) {
+  return {
+    id: w.id, savedAt: w.savedAt, savedTotal: w.savedTotal,
+    lastTotal: w.lastTotal != null ? w.lastTotal : w.total,
+    checkedAt: w.checkedAt || null,
+    ended: w.ended ? true : undefined,
+    target: w.target,
+    hist: Array.isArray(w.hist) ? w.hist : [],
+  };
+}
 
 /* ============================================================
    SETTINGS
@@ -553,9 +578,10 @@ function toggleWatch(id) {
   if (list.some((w) => w.id === id)) {
     list = list.filter((w) => w.id !== id);
   } else {
-    const x = results.find((r) => r.id === id);
+    const x = results.find((r) => r.id === id) || liveInfo.get(id);
     if (!x) return;
-    list.unshift({ ...x, savedAt: Date.now(), savedTotal: x.total, lastTotal: x.total, checkedAt: null, hist: x.total != null ? [{ t: Date.now(), v: x.total }] : [] });
+    liveInfo.set(id, x); // display details stay in memory only (data rule)
+    list.unshift({ id: x.id, savedAt: Date.now(), savedTotal: x.total, lastTotal: x.total, checkedAt: null, hist: x.total != null ? [{ t: Date.now(), v: x.total }] : [] });
     if (list.length > 60) list = list.slice(0, 60);
   }
   lsSet(K.watch, list);
@@ -652,30 +678,50 @@ function watchDelta(x) {
     ? x.lastTotal - x.savedTotal : null;
 }
 
+// merge a persisted watch entry (ids + prices only) with live session details
+function watchDisplay(w) {
+  const info = liveInfo.get(w.id);
+  const d = info ? { ...info } : {
+    id: w.id,
+    title: `Item ${legacyIdOf(w.id) || w.id} — refresh prices to load details`,
+    url: itemUrlFromId(w.id), img: FALLBACK_IMG,
+    price: w.lastTotal, shipping: null, shippingKnown: false,
+    currency: marketCurrency(), condition: "", isAuction: false, isBIN: false,
+    endAt: null, listedAt: 0, seller: { name: "", pct: null, n: 0 },
+  };
+  d.total = w.lastTotal != null ? w.lastTotal : d.total;
+  d.pending = !info;
+  return d;
+}
+
 function renderWatch() {
   const list = getWatch().slice();
   const grid = $("#watchGrid");
   _marketRef = null; // watch cards don't show market lines
 
+  const endOf = (w) => { const i = liveInfo.get(w.id); return (i && i.endAt) || 9e15; };
   const sortBy = $("#watchSort").value;
   if (sortBy === "drop") list.sort((a, b) => (watchDelta(a) ?? 0) - (watchDelta(b) ?? 0)); // biggest drop first
-  else if (sortBy === "total") list.sort((a, b) => ((a.lastTotal ?? a.total) ?? 1e12) - ((b.lastTotal ?? b.total) ?? 1e12));
-  else if (sortBy === "ending") list.sort((a, b) => (a.endAt || 9e15) - (b.endAt || 9e15));
+  else if (sortBy === "total") list.sort((a, b) => (a.lastTotal ?? 1e12) - (b.lastTotal ?? 1e12));
+  else if (sortBy === "ending") list.sort((a, b) => endOf(a) - endOf(b));
   // "saved" = stored order (newest saved first) — no sort needed
 
-  grid.innerHTML = list.map((x) => {
-    return cardHTML({ ...x, total: x.lastTotal != null ? x.lastTotal : x.total }, null,
-      { delta: watchDelta(x), ended: !!x.ended, watch: true, checked: x.checkedAt, hist: x.hist });
+  grid.innerHTML = list.map((w) => {
+    const d = watchDisplay(w);
+    return cardHTML(d, null,
+      { delta: watchDelta(w), ended: !!w.ended, watch: true, checked: w.checkedAt, hist: w.hist, target: w.target, pending: d.pending });
   }).join("");
   $("#watchEmpty").hidden = list.length > 0;
+  renderSnipe();
 
   const summary = $("#watchSummary");
   summary.hidden = list.length === 0;
   if (list.length) {
     const live = list.filter((w) => !w.ended);
     const dropped = list.filter((w) => (watchDelta(w) ?? 0) < 0).length;
-    const buyAll = live.reduce((s, w) => s + (((w.lastTotal != null ? w.lastTotal : w.total)) || 0), 0);
-    const cur = (list[0] && list[0].currency) || marketCurrency();
+    const buyAll = live.reduce((s, w) => s + (w.lastTotal || 0), 0);
+    const first = liveInfo.get(list[0] && list[0].id);
+    const cur = (first && first.currency) || marketCurrency();
     summary.innerHTML =
       `<b>${list.length}</b> watched · <b>${live.length}</b> live` +
       ` · <b>${dropped}</b> dropped since saved` +
@@ -683,6 +729,34 @@ function renderWatch() {
   }
 }
 $("#watchSort").addEventListener("change", renderWatch);
+
+/* ---------- auction snipe panel (ending soon, under target) ---------- */
+function renderSnipe() {
+  const box = $("#snipeBox");
+  if (!box) return;
+  const winMin = parseInt(lsGet(K.snipe, "60"), 10) || 60;
+  $("#snipeWin").value = String(winMin);
+  const now = Date.now();
+  const rows = [];
+  for (const w of getWatch()) {
+    if (w.ended) continue;
+    const info = liveInfo.get(w.id); // end times are live-only (data rule)
+    if (!info || !info.isAuction || !info.endAt) continue;
+    const msLeft = info.endAt - now;
+    if (msLeft <= 0 || msLeft > winMin * 60000) continue;
+    const under = w.target != null && w.lastTotal != null ? w.lastTotal <= w.target : null;
+    rows.push({ w, info, msLeft, under });
+  }
+  rows.sort((a, b) => a.msLeft - b.msLeft);
+  box.hidden = rows.length === 0;
+  $("#snipeRows").innerHTML = rows.map(({ w, info, under }) => `
+    <div class="alert-row snipe-row${under ? " under" : ""}">
+      <span class="snipe-time">⏱ ${timeLeft(info.endAt)}</span>
+      <a class="snipe-link" href="${esc(info.url)}" target="_blank" rel="noopener">${esc(info.title)}</a>
+      <span class="alert-meta">bid ${money(w.lastTotal, info.currency)}${w.target != null ? ` · target ${money(w.target, info.currency)}` : ""}</span>
+      ${under ? `<span class="badge ending">UNDER TARGET</span>` : ""}
+    </div>`).join("");
+}
 
 function showWatchStatus(msg, cls) {
   const el = $("#watchStatus");
@@ -714,14 +788,12 @@ async function refreshWatchPrices(auto) {
       const w = queue.shift();
       try {
         const it = await ebayGET("/buy/browse/v1/item/" + encodeURIComponent(w.id), true); // always live, never cached
-        const fresh = normalize({ ...it, itemId: w.id, itemWebUrl: it.itemWebUrl || w.url });
+        const fresh = normalize({ ...it, itemId: w.id, itemWebUrl: it.itemWebUrl || itemUrlFromId(w.id) });
+        liveInfo.set(w.id, fresh); // session-only details (data rule)
         const prev = w.lastTotal != null ? w.lastTotal : w.savedTotal;
         w.lastTotal = fresh.total != null ? fresh.total : w.lastTotal;
-        w.price = fresh.price != null ? fresh.price : w.price;
-        w.shipping = fresh.shipping; w.shippingKnown = fresh.shippingKnown;
-        w.endAt = fresh.endAt || w.endAt;
         w.checkedAt = Date.now();
-        // price history for the sparkline — record changes, cap the series
+        // price history for the sparkline — our own observed prices only
         if (w.lastTotal != null) {
           if (!w.hist || !w.hist.length) w.hist = w.savedTotal != null ? [{ t: w.savedAt || Date.now(), v: w.savedTotal }] : [];
           const lastPt = w.hist[w.hist.length - 1];
@@ -729,9 +801,9 @@ async function refreshWatchPrices(auto) {
           if (w.hist.length > 60) w.hist = w.hist.slice(-60);
         }
         // ended listings can still answer with 200 — catch them by end date
-        if (w.endAt && w.endAt < Date.now()) { w.ended = true; gone++; }
+        if (fresh.endAt && fresh.endAt < Date.now()) { w.ended = true; gone++; }
         else if (fresh.total != null && prev != null && fresh.total < prev - 0.005) {
-          drops.push(`${w.title.length > 48 ? w.title.slice(0, 48) + "…" : w.title} — now ${money(fresh.total, w.currency)} (was ${money(prev, w.currency)})`);
+          drops.push(`${fresh.title.length > 48 ? fresh.title.slice(0, 48) + "…" : fresh.title} — now ${money(fresh.total, fresh.currency)} (was ${money(prev, fresh.currency)})`);
         }
       } catch (err) {
         const m = String(err && err.message || "");
@@ -1031,14 +1103,15 @@ $("#exportWatch").addEventListener("click", () => {
   if (!list.length) { showWatchStatus("Nothing to export yet — watch some listings first.", "err"); return; }
   const rows = [["Title", "Saved total", "Current total", "Change", "Currency", "Condition", "Status", "Saved on", "Last checked", "Seller", "URL"]];
   for (const x of list) {
-    const cur = x.lastTotal != null ? x.lastTotal : x.total;
+    const info = liveInfo.get(x.id); // details are live-only (data rule)
+    const cur = x.lastTotal;
     rows.push([
-      x.title, x.savedTotal, cur,
+      info ? info.title : "item " + (legacyIdOf(x.id) || x.id), x.savedTotal, cur,
       x.savedTotal != null && cur != null ? (cur - x.savedTotal).toFixed(2) : "",
-      x.currency, x.condition, x.ended ? "Ended" : "Live",
+      info ? info.currency : "", info ? info.condition : "", x.ended ? "Ended" : "Live",
       x.savedAt ? new Date(x.savedAt).toISOString() : "",
       x.checkedAt ? new Date(x.checkedAt).toISOString() : "",
-      x.seller && x.seller.name, x.url,
+      (info && info.seller && info.seller.name) || "", info ? info.url : itemUrlFromId(x.id),
     ]);
   }
   downloadCSV(rows, "tokubai-watchlist.csv");
@@ -1090,7 +1163,7 @@ $("#importFile").addEventListener("change", async (e) => {
       lsSet(K.settings, settings);
       localStorage.removeItem(K.token);
     }
-    if (Array.isArray(data.watch)) { lsSet(K.watch, data.watch); watchIdsInvalidate(); }
+    if (Array.isArray(data.watch)) { lsSet(K.watch, data.watch.map(stripWatchItem)); watchIdsInvalidate(); } // old backups may hold listing content — strip it (data rule)
     if (Array.isArray(data.recent)) lsSet(K.recent, data.recent);
     if (Array.isArray(data.hidden)) lsSet(K.hidden, data.hidden);
     if (Array.isArray(data.alerts)) lsSet(K.alerts, data.alerts);
@@ -1121,7 +1194,12 @@ function switchTab(name) {
   $("#tab-search").hidden = name !== "search";
   $("#tab-watch").hidden = name !== "watch";
   $("#tab-settings").hidden = name !== "settings";
-  if (name === "watch") { renderWatch(); renderAlerts(); }
+  if (name === "watch") {
+    renderWatch();
+    renderAlerts();
+    // details are never persisted (data rule) — hydrate live on first visit
+    if (settingsReady() && getWatch().some((w) => !w.ended && !liveInfo.has(w.id))) refreshWatchPrices(true);
+  }
   if (name === "settings") loadSettingsForm();
 }
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
@@ -1140,6 +1218,14 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* boot */
+// migrate any pre-data-rule watch entries: strip cached listing content,
+// keeping only ids + our own observed prices
+(function migrateWatch() {
+  const list = getWatch();
+  if (list.length && list.some((w) => "title" in w || "img" in w || "seller" in w)) {
+    lsSet(K.watch, list.map(stripWatchItem));
+  }
+})();
 applyTheme(theme);
 loadSettingsForm();
 renderRecent();
