@@ -245,6 +245,8 @@ a { color: inherit; }
   display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
   padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--chip);
 }
+.dash-head[data-runalert] { cursor: pointer; }
+.dash-head[data-runalert]:hover b { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; }
 .dash-head b { font-size: 14px; }
 .dash-head .dim { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .dash-row {
@@ -323,6 +325,9 @@ a { color: inherit; }
 .lcard.hot:hover { box-shadow: 0 0 0 3px var(--red-soft), var(--shadow-md); }
 .lcard.ended { opacity: .58; }
 .lcard.ended:hover { transform: none; opacity: .8; }
+.lcard.pending { animation: pendpulse 1.6s ease-in-out infinite; }
+.lcard.pending h3 { color: var(--faint); }
+@keyframes pendpulse { 50% { opacity: .55; } }
 .lcard .imgbox {
   position: relative; border-radius: var(--r) var(--r) 0 0;
   background: #f8f8f7; border-bottom: 1px solid var(--border);
@@ -398,6 +403,7 @@ a { color: inherit; }
 }
 .block-btn:hover { color: var(--bad); }
 .checked { font: 11.5px var(--mono); color: var(--faint); }
+.spark-wrap { display: block; }
 .spark { width: 100%; height: 26px; display: block; }
 .spark polyline { stroke: var(--muted); stroke-width: 1.5; }
 .spark.down polyline { stroke: var(--ok); }   /* price falling = good for buyers */

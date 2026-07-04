@@ -12,7 +12,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const lsGet = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full/blocked */ } };
 
-const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers", snipe: "ff_snipe", insights: "ff_insights" };
+const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers", snipe: "ff_snipe", insights: "ff_insights", wsort: "ff_wsort" };
 
 const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5, procPct: 2.9, procFixed: 0.3, promoPct: 0, adminToken: "" };
 let settings = { ...DEFAULTS, ...lsGet(K.settings, {}) };
@@ -415,7 +415,7 @@ function scoreListing(x, mkt) {
 /* ============================================================
    RENDERING
    ============================================================ */
-function sparkSVG(hist) {
+function sparkSVG(hist, cur) {
   const pts = (hist || []).filter((h) => h && h.v != null);
   if (pts.length < 2) return "";
   const vs = pts.map((h) => h.v);
@@ -428,7 +428,7 @@ function sparkSVG(hist) {
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
   const dir = vs[vs.length - 1] < vs[0] ? "down" : vs[vs.length - 1] > vs[0] ? "up" : "flat";
-  return `<svg class="spark ${dir}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${line}" fill="none" vector-effect="non-scaling-stroke"/></svg>`;
+  return `<div class="spark-wrap" title="${pts.length} price checks · low ${money(min, cur)} · high ${money(max, cur)}"><svg class="spark ${dir}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${line}" fill="none" vector-effect="non-scaling-stroke"/></svg></div>`;
 }
 
 function timeAgo(ts) {
@@ -457,7 +457,7 @@ function cardHTML(x, sc, opts) {
   const tierLabel = { hot: "HOT", great: "GREAT", good: "GOOD", fair: "FAIR" };
 
   return `
-  <article class="lcard${sc && sc.hot ? " hot" : ""}${o.ended ? " ended" : ""}" data-id="${esc(x.id)}">
+  <article class="lcard${sc && sc.hot ? " hot" : ""}${o.ended ? " ended" : ""}${o.pending ? " pending" : ""}" data-id="${esc(x.id)}">
     <div class="imgbox">
       <img src="${esc(x.img)}" alt="" loading="lazy" onerror="this.src='${FALLBACK_IMG}'" />
       ${sc ? `<span class="tag-score t-${sc.tier}" title="Deal score ${sc.score}/100 — ${Math.round(sc.discount * 100)}% vs ${sc.soldBased ? "SOLD" : "asking"} median">⛁ ${sc.score} ${tierLabel[sc.tier]}</span>` : ""}
@@ -481,7 +481,7 @@ function cardHTML(x, sc, opts) {
         ? `<div class="below sold"><b>${Math.round(sc.discount * 100)}% below</b> SOLD median ${money(soldStats.median, x.currency)} <button class="linklike comps-link" data-comps="${esc(x.id)}">comps</button></div>`
         : `<div class="below"><b>${Math.round(sc.discount * 100)}% below</b> market median ${money(marketRef().median, x.currency)}</div>`) : ""}
       ${sc && sc.profit != null ? `<div class="profit">≈ +${money(sc.profit, x.currency)} est. profit if flipped at market</div>` : ""}
-      ${o.hist ? sparkSVG(o.hist) : ""}
+      ${o.hist ? sparkSVG(o.hist, x.currency) : ""}
       ${o.delta != null ? `<div class="delta ${o.delta < 0 ? "down" : "up"}">${o.delta < 0 ? "▼" : "▲"} ${money(Math.abs(o.delta), x.currency)} since saved</div>` : ""}
       ${x.seller.name ? `<div class="seller">Seller <b>${esc(x.seller.name)}</b>${x.seller.pct != null ? ` · ${x.seller.pct}% (${x.seller.n.toLocaleString()})` : ""}${!o.watch ? ` <button class="block-btn" data-block="${esc(x.seller.name)}" title="Never show this seller again">block</button>` : ""}</div>` : ""}
       ${o.checked ? `<div class="checked">↻ checked ${timeAgo(o.checked)}</div>` : ""}
@@ -859,7 +859,10 @@ function renderWatch() {
       ` · buy-all total <b>${money(buyAll, cur)}</b>`;
   }
 }
-$("#watchSort").addEventListener("change", renderWatch);
+$("#watchSort").addEventListener("change", () => { lsSet(K.wsort, $("#watchSort").value); renderWatch(); });
+
+// snipe countdowns go stale fast — tick them while the watch tab is visible
+setInterval(() => { if (!$("#tab-watch").hidden) renderSnipe(); }, 30000);
 
 /* ---------- auction snipe panel (ending soon, under target) ---------- */
 function renderSnipe() {
@@ -1019,7 +1022,8 @@ function setupAutoRefresh() {
   if (mins > 0) {
     autoTimer = setInterval(async () => {
       if (getWatch().some((w) => !w.ended)) await refreshWatchPrices(true);
-      checkDealAlerts(true);
+      await checkDealAlerts(true);
+      if (!$("#tab-dash").hidden) renderDashboard(true); // keep visible columns live too
     }, mins * 60 * 1000);
   }
 }
@@ -1243,7 +1247,9 @@ async function checkDealAlerts(auto) {
   const alerts = getAlerts();
   if (!alerts.length || !settingsReady()) return;
   isCheckingAlerts = true;
-  if (!auto) showWatchStatus(`Checking ${alerts.length} deal alert${alerts.length === 1 ? "" : "s"}…`, "busy");
+  // stay quiet when a watch-refresh summary is on screen — don't stomp it
+  const quiet = auto || getWatch().length > 0;
+  if (!quiet) showWatchStatus(`Checking ${alerts.length} deal alert${alerts.length === 1 ? "" : "s"}…`, "busy");
   const found = [];
   for (const a of alerts) {
     try {
@@ -1267,7 +1273,7 @@ async function checkDealAlerts(auto) {
       `${x.title.length > 44 ? x.title.slice(0, 44) + "…" : x.title} — ${money(x.shippingKnown ? x.total : x.price, x.currency)}${a.target != null ? ` (target ${money(a.target, a.currency)})` : " (new listing)"}`);
     showWatchStatus(`🔔 ${found.length} new listing${found.length === 1 ? "" : "s"} under target! Click the alert to see them, newest first.`, "ok");
     pushNote(`Tokubai — ${found.length} new deal${found.length === 1 ? "" : "s"} under your target 🔔`, lines, "tokubai-alerts");
-  } else if (!auto && !getWatch().length) {
+  } else if (!quiet) {
     showWatchStatus("Alerts checked — nothing new under target yet.", "ok");
   }
 }
@@ -1481,7 +1487,7 @@ const dashData = new Map(); // alertId → normalized items (session only — da
 
 function dashColHTML(a, items) {
   return `<div class="dash-col">
-    <div class="dash-head"><b>${esc(a.q)}</b><span class="dim">${alertCondText(a)}</span></div>
+    <div class="dash-head" data-runalert="${esc(a.id)}" role="button" title="Open this search, newest first"><b>${esc(a.q)}</b><span class="dim">${alertCondText(a)}</span></div>
     ${items
       ? (items.map((x) => {
           const t = x.shippingKnown ? x.total : x.price;
@@ -1604,6 +1610,7 @@ $("#exportData").addEventListener("click", () => {
   const payload = {
     app: "tokubai", version: 1, exportedAt: new Date().toISOString(),
     settings, watch: getWatch(), recent: lsGet(K.recent, []), hidden: getHidden(), alerts: getAlerts(), sellers: getBlocked(),
+    prefs: { theme: lsGet(K.theme, "auto"), notify: lsGet(K.notify, false), auto: lsGet(K.auto, "0"), snipe: lsGet(K.snipe, "60"), wsort: lsGet(K.wsort, "saved") },
   };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
@@ -1631,6 +1638,13 @@ $("#importFile").addEventListener("change", async (e) => {
     if (Array.isArray(data.hidden)) lsSet(K.hidden, data.hidden);
     if (Array.isArray(data.alerts)) lsSet(K.alerts, data.alerts);
     if (Array.isArray(data.sellers)) lsSet(K.sellers, data.sellers);
+    if (data.prefs && typeof data.prefs === "object") {
+      if (data.prefs.theme) { theme = data.prefs.theme; lsSet(K.theme, theme); applyTheme(theme); }
+      if (data.prefs.notify != null) { notifyOn = !!data.prefs.notify; lsSet(K.notify, notifyOn); paintNotifyBtn(); }
+      if (data.prefs.auto != null) { lsSet(K.auto, String(data.prefs.auto)); setupAutoRefresh(); }
+      if (data.prefs.snipe != null) lsSet(K.snipe, String(data.prefs.snipe));
+      if (data.prefs.wsort) { lsSet(K.wsort, data.prefs.wsort); $("#watchSort").value = data.prefs.wsort; }
+    }
     loadSettingsForm();
     renderRecent();
     updateWatchCount();
@@ -1702,6 +1716,7 @@ applyTheme(theme);
 loadSettingsForm();
 renderRecent();
 updateWatchCount();
+$("#watchSort").value = lsGet(K.wsort, "saved"); // restore the preferred watch order
 renderWatch();
 updateHiddenCount();
 updateBlockedCount();
