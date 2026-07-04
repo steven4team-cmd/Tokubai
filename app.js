@@ -247,7 +247,9 @@ function buildSearchPath(q, offset) {
   p.set("q", q + exq); // eBay supports -word exclusions natively
   p.set("limit", String(PAGE));
   p.set("offset", String(offset || 0));
-  p.set("fieldgroups", "ASPECT_REFINEMENTS"); // ask for eBay's dynamic filter data
+  // MATCHING_ITEMS must be listed explicitly — asking for refinements alone
+  // makes eBay omit the listings entirely (the "0 results with counts" bug)
+  p.set("fieldgroups", "MATCHING_ITEMS,ASPECT_REFINEMENTS");
 
   // dynamic aspect refinements — eBay's left-rail filters, applied server-side
   const selNames = Object.keys(aspectSel).filter((n) => aspectSel[n] && aspectSel[n].size);
@@ -718,7 +720,7 @@ async function runScan(rawQuery, append, keepFilters) {
     }
     if (!append) soldStats = await fetchSoldStats(q); // null unless Insights access confirmed
     nextOffset += PAGE;
-    $("#moreBtn").hidden = !(data.total && nextOffset < Math.min(data.total, 600));
+    $("#moreBtn").hidden = !(results.length && data.total && nextOffset < Math.min(data.total, 600)); // never offer Load more on an empty grid
 
     renderResults();
     showStatus(results.length ? null : `No live listings matched “${q}” with these filters. Loosen the filters or reword the search.`);
