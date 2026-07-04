@@ -56,6 +56,16 @@ Browsers block direct calls to eBay's API, so Tokubai needs a tiny relay you own
 - **Shareable searches** — the URL carries your query; bookmark it or send it.
 - Theme toggle (auto / light / dark), `/` to focus search.
 
+## Hosting the app (needed for phone push & install)
+
+Web Push and installing Tokubai as an app both require **HTTPS** — a local `python -m http.server` works on your desktop (`localhost` is allowed), but your phone needs a real URL. The zero-effort option is GitHub Pages, since this repo is already on GitHub:
+
+1. Repo → **Settings → Pages** → Source: *Deploy from a branch* → Branch: `main`, folder `/ (root)` → Save.
+   (Or from a terminal: `gh api repos/steven4team-cmd/Tokubai/pages -X POST -f "source[branch]=main" -f "source[path]=/"`)
+2. After a minute the app is live at `https://steven4team-cmd.github.io/Tokubai/` — open it on your phone, install it (browser menu → *Add to Home Screen / Install app*), and enable push from Settings there.
+
+Note: the page (like the repo) is public, but that's fine — your keys live only in each browser's localStorage and in your worker's secrets, never in the hosted files.
+
 ## 24/7 new-listing tracker (server-side)
 
 The worker doubles as a background deal tracker: a Cloudflare **cron trigger** re-runs your saved searches every 2 minutes, compares each *newly listed* item against a rolling **median going rate** (fixed-price comps, your filters applied), and notifies you — app closed, laptop shut.
