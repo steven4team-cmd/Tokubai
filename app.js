@@ -557,7 +557,7 @@ function renderResults() {
   }
   if ($("#fGems").checked) scored = scored.filter(({ x }) => x.title.length <= 40);
 
-  scored.sort((a, b) => {
+  if (sortBy !== "match") scored.sort((a, b) => { // "match" keeps eBay's own relevance order
     if (sortBy === "totalAsc") return (a.x.total ?? 1e12) - (b.x.total ?? 1e12);
     if (sortBy === "newest") return (b.x.listedAt || 0) - (a.x.listedAt || 0);
     if (sortBy === "ending") return (a.x.endAt || 9e15) - (b.x.endAt || 9e15);
@@ -610,7 +610,8 @@ function renderAspects() {
   box.innerHTML = aspects.map((a) => {
     const name = a.localizedAspectName;
     const sel = aspectSel[name] || new Set();
-    const vals = (a.aspectValueDistributions || []).slice(0, 8);
+    // values containing filter-syntax separators can't be round-tripped safely
+    const vals = (a.aspectValueDistributions || []).filter((v) => !/[,{}|]/.test(v.localizedAspectValue || "")).slice(0, 8);
     if (!vals.length) return "";
     return `<div class="aspect-group"><span class="aspect-name">${esc(name)}</span>` +
       vals.map((v) => `<button class="chip aspect${sel.has(v.localizedAspectValue) ? " on" : ""}" data-aspect="${esc(name)}" data-value="${esc(v.localizedAspectValue)}">${esc(v.localizedAspectValue)}${v.matchCount != null ? ` <span class="cnt">${v.matchCount.toLocaleString()}</span>` : ""}</button>`).join("") +
@@ -747,6 +748,19 @@ $("#moreBtn").addEventListener("click", () => lastQuery && runScan(lastQuery.raw
 }));
 // view-only filters — re-render without another API call
 ["fSeller", "fGems"].forEach((id) => $("#" + id).addEventListener("change", () => results.length && renderResults()));
+
+$("#resetFilters").addEventListener("click", () => {
+  ["fMin", "fMax", "fExclude"].forEach((id) => { $("#" + id).value = ""; });
+  ["fCat", "fCond", "fType", "fLoc", "fSeller"].forEach((id) => { $("#" + id).value = ""; });
+  $("#fFreeShip").checked = false;
+  $("#fGems").checked = false;
+  aspectSel = {};
+  if (lastQuery) runScan(lastQuery.raw, false, true);
+  else renderAspects();
+});
+
+// on small screens the filter panel collapses behind this toggle
+$("#filtersToggle").addEventListener("click", () => $("#filters").classList.toggle("open"));
 $("#fSort").addEventListener("change", () => results.length && renderResults());
 
 /* ---------- recent searches ---------- */

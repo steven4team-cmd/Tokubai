@@ -45,6 +45,7 @@
       <div class="chips" id="recentChips" aria-label="Recent scans"></div>
     </div>
 
+    <button id="filtersToggle" class="btn ghost filters-toggle" type="button">&#9776; Filters</button>
     <div class="filters" id="filters">
       <label>Min price
         <input id="fMin" type="number" min="0" step="1" placeholder="0" />
@@ -107,9 +108,11 @@
       <label class="check-label" title="Only listings with very short titles — often poorly listed and underpriced">Hidden gems
         <input id="fGems" type="checkbox" />
       </label>
+      <button id="resetFilters" class="linklike reset-filters" type="button">&#10005; reset filters</button>
       <label>Sort by
         <select id="fSort">
           <option value="score">Deal score</option>
+          <option value="match">Best match (eBay)</option>
           <option value="totalAsc">Total cost: low &rarr; high</option>
           <option value="newest">Newest listed</option>
           <option value="ending">Ending soonest</option>

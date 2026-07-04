@@ -1,6 +1,6 @@
 /* Tokubai service worker — network-first with cache fallback.
    Fresh code always wins when online; the app shell still opens offline. */
-const VERSION = "tokubai-v6";
+const VERSION = "tokubai-v7";
 const ASSETS = ["./", "index.html", "style.css", "app.js", "manifest.json", "icon.svg"];
 
 self.addEventListener("install", (e) => {
