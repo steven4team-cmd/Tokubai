@@ -239,6 +239,21 @@
     </fieldset>
 
     <fieldset>
+      <legend>24/7 server tracker</legend>
+      <p class="hint-block">Runs inside your Cloudflare Worker on a cron trigger &mdash; deal alerts reach your phone/desktop even with this app closed. One-time setup (KV binding, secrets, cron) is in the README.</p>
+      <label>Worker admin token <span class="hint">(the ADMIN_TOKEN secret you set on the worker)</span>
+        <input id="sAdminToken" type="password" spellcheck="false" placeholder="long random string" />
+      </label>
+      <div class="settings-actions">
+        <button id="syncTrackers" class="btn ghost" type="button">&#9729; Sync alerts to server</button>
+        <button id="pushEnable" class="btn ghost" type="button">&#128276; Enable push here</button>
+        <button id="testNotify" class="btn ghost" type="button">Test notification</button>
+        <button id="trackerStatus" class="btn ghost" type="button">Status</button>
+      </div>
+      <p class="status-inline" id="trackerLine" role="status"></p>
+    </fieldset>
+
+    <fieldset>
       <legend>Profit math</legend>
       <label>Selling fees <span class="hint">(% taken when you resell &mdash; eBay final value fee &asymp; 13.25)</span>
         <input id="sFee" type="number" min="0" max="50" step="0.05" />
@@ -298,7 +313,10 @@
     <h3 id="alertDlgTitle">New deal alert</h3>
     <p id="alertDlgInfo" class="dlg-info"></p>
     <label>Alert when a new listing totals at or under
-      <input id="alertTarget" type="number" min="0" step="0.01" required inputmode="decimal" />
+      <input id="alertTarget" type="number" min="0" step="0.01" inputmode="decimal" placeholder="absolute price, e.g. 250" />
+    </label>
+    <label id="alertPctRow">&hellip;or is at least this % below the going rate
+      <input id="alertPct" type="number" min="1" max="90" step="1" inputmode="numeric" placeholder="e.g. 40" />
     </label>
     <div class="dlg-actions">
       <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>

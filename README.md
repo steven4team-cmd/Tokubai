@@ -56,6 +56,26 @@ Browsers block direct calls to eBay's API, so Tokubai needs a tiny relay you own
 - **Shareable searches** — the URL carries your query; bookmark it or send it.
 - Theme toggle (auto / light / dark), `/` to focus search.
 
+## 24/7 new-listing tracker (server-side)
+
+The worker doubles as a background deal tracker: a Cloudflare **cron trigger** re-runs your saved searches every 2 minutes, compares each *newly listed* item against a rolling **median going rate** (fixed-price comps, your filters applied), and notifies you — app closed, laptop shut.
+
+### One-time setup
+
+1. **Redeploy** the latest [`worker.js`](worker.js) over your existing worker (the proxy behavior is unchanged).
+2. **KV**: dash → Storage & Databases → KV → create a namespace (any name) → worker → Settings → Bindings → add binding, variable name **`TRACKER`**.
+3. **Secrets** (worker → Settings → Variables & secrets): `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `ADMIN_TOKEN` (any long random string). Run `node webpush-keys.js` locally and add `VAPID_PUBLIC_KEY` + `VAPID_PRIVATE_KEY`; set `VAPID_SUBJECT` (e.g. `mailto:you@example.com`) as a plain variable. Optional: `NTFY_TOPIC` (a unique topic name) for phone alerts via the free [ntfy](https://ntfy.sh) app.
+4. **Cron**: worker → Settings → Triggers → Cron Triggers → `*/2 * * * *`.
+5. **In the app**: Settings → *24/7 server tracker* → paste the same admin token → **Sync alerts to server** → **Enable push here** → **Test notification**.
+
+### How it works (and the budget math)
+
+- Each alert you sync becomes a tracker: keyword + category/condition/price filters + exclude-words, with an **absolute ceiling** and/or a **% below going rate** threshold.
+- Every cron tick: one `sort=newlyListed` search per tracker; genuinely-new items are detected via a `listingDate` watermark plus a small ring of recent item IDs. The going rate is the **median** total (price + shipping) of ~100 fixed-price comps, cached for 6 hours.
+- Budget: ~720 polls/day per tracker + ~4 baseline calls, against eBay's ~5,000/day — the worker caps you at 8 trackers. KV is written **only when state changes**, staying inside the free tier's ~1,000 writes/day.
+- **Data rule:** KV holds only tracker configs, bare item IDs, watermark timestamps, and median *numbers*. Listing content is fetched live each poll, used for the notification, and discarded. "Last poll" in Status only advances when state changes — use *Test notification* or the `/api/run` endpoint to verify liveness.
+- Notifications are modular (`notify()` in worker.js): Web Push (VAPID/RFC 8291, works on desktop + Android; iOS needs the PWA installed) and ntfy.sh ship now; an email/SMS channel is a one-function add.
+
 ## Node client (server-side)
 
 [`ebay-client.js`](ebay-client.js) is a zero-dependency Node 18+ module for calling the Browse API from scripts or a backend — same API, no browser and no proxy needed.

@@ -14,7 +14,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 
 const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers", snipe: "ff_snipe", insights: "ff_insights" };
 
-const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5, procPct: 2.9, procFixed: 0.3, promoPct: 0 };
+const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5, procPct: 2.9, procFixed: 0.3, promoPct: 0, adminToken: "" };
 let settings = { ...DEFAULTS, ...lsGet(K.settings, {}) };
 
 const money = (v, cur) => {
@@ -73,6 +73,7 @@ function loadSettingsForm() {
   $("#sProc").value = settings.procPct;
   $("#sProcFixed").value = settings.procFixed;
   $("#sPromo").value = settings.promoPct;
+  $("#sAdminToken").value = settings.adminToken;
 }
 function readSettingsForm() {
   return {
@@ -85,6 +86,7 @@ function readSettingsForm() {
     procPct: clamp(parseFloat($("#sProc").value) || 0, 0, 20),
     procFixed: Math.max(0, parseFloat($("#sProcFixed").value) || 0),
     promoPct: clamp(parseFloat($("#sPromo").value) || 0, 0, 30),
+    adminToken: $("#sAdminToken").value.trim(),
   };
 }
 function settingsReady() { return !!(settings.clientId && settings.clientSecret && settings.proxy); }
@@ -1044,8 +1046,8 @@ function renderAlerts() {
   $("#alertsBox").hidden = alerts.length === 0;
   $("#alertRows").innerHTML = alerts.map((a) => `
     <div class="alert-row">
-      <button class="alert-run" data-runalert="${esc(a.id)}" title="Run this search now, newest first">🔔 <b>${esc(a.q)}</b> — at or under ${money(a.target, a.currency)}</button>
-      <span class="alert-meta">${a.lastRunAt ? `checked ${timeAgo(a.lastRunAt)}` : "not checked yet"}${a.hits ? ` · ${a.hits} found so far` : ""}</span>
+      <button class="alert-run" data-runalert="${esc(a.id)}" title="Run this search now, newest first">🔔 <b>${esc(a.q)}</b> — ${alertCondText(a)}</button>
+      <span class="alert-meta">${a.target == null ? "server-checked · " : ""}${a.lastRunAt ? `checked ${timeAgo(a.lastRunAt)}` : "not checked yet"}${a.hits ? ` · ${a.hits} found so far` : ""}</span>
       <button class="alert-del" data-editalert="${esc(a.id)}" aria-label="Edit target price" title="Edit target price">✎</button>
       <button class="alert-del" data-delalert="${esc(a.id)}" aria-label="Delete this alert" title="Delete alert">✕</button>
     </div>`).join("");
@@ -1054,11 +1056,20 @@ function renderAlerts() {
 const alertDlg = $("#alertDlg");
 let dlgCtx = null; // what the open dialog is editing/creating
 
+function alertCondText(a) {
+  const bits = [];
+  if (a.target != null) bits.push(`at or under ${money(a.target, a.currency)}`);
+  if (a.pctBelow != null) bits.push(`${a.pctBelow}%+ below going rate`);
+  return bits.join(" or ") || "—";
+}
+
 function openAlertDialog(ctx) {
   dlgCtx = ctx;
   $("#alertDlgTitle").textContent = ctx.mode === "edit" ? "Edit deal alert" : "New deal alert";
   $("#alertDlgInfo").innerHTML = ctx.info;
-  $("#alertTarget").value = ctx.suggested || "";
+  $("#alertTarget").value = ctx.suggested != null ? ctx.suggested : "";
+  $("#alertPct").value = ctx.pct != null ? ctx.pct : "";
+  $("#alertPctRow").hidden = ctx.mode === "watchtarget"; // snipe targets are absolute only
   alertDlg.returnValue = "";
   alertDlg.showModal();
   $("#alertTarget").select();
@@ -1068,10 +1079,13 @@ alertDlg.addEventListener("close", () => {
   const ctx = dlgCtx;
   dlgCtx = null;
   if (!ctx || alertDlg.returnValue !== "save") return;
-  const target = parseFloat($("#alertTarget").value);
-  if (isNaN(target) || target < 0) return;
+  const tRaw = $("#alertTarget").value.trim();
+  const pRaw = $("#alertPct").value.trim();
+  const target = tRaw === "" ? null : parseFloat(tRaw);
+  const pct = pRaw === "" ? null : clamp(parseFloat(pRaw) || 0, 1, 90);
 
   if (ctx.mode === "watchtarget") {
+    if (target == null || isNaN(target) || target < 0) return;
     const list = getWatch();
     const w = list.find((x) => x.id === ctx.id);
     if (!w) return;
@@ -1081,26 +1095,42 @@ alertDlg.addEventListener("close", () => {
     showWatchStatus(w.target != null ? `Snipe target set at ${money(w.target, (liveInfo.get(w.id) || {}).currency)}.` : "Snipe target cleared.", "ok");
     return;
   }
-  if (target <= 0) return;
+
+  const hasTarget = target != null && !isNaN(target) && target > 0;
+  const hasPct = pct != null && pct > 0;
+  if (!hasTarget && !hasPct) { showStatus("Alert not saved — set an absolute price, a % below going rate, or both.", "err"); return; }
 
   if (ctx.mode === "edit") {
     const alerts = getAlerts();
     const a = alerts.find((x) => x.id === ctx.id);
     if (!a) return;
-    a.target = target;
+    a.target = hasTarget ? target : null;
+    a.pctBelow = hasPct ? pct : null;
     lsSet(K.alerts, alerts);
     renderAlerts();
-    showWatchStatus(`Alert updated — “${a.q}” now flags at ${money(target, a.currency)} or less.`, "ok");
+    showWatchStatus(`Alert updated — “${a.q}” now flags listings ${alertCondText(a)}.`, "ok");
     return;
   }
 
-  const a = { id: String(Date.now()), q: ctx.q, target, currency: ctx.currency, createdAt: Date.now(), lastRunAt: null, seen: [], hits: 0 };
+  // snapshot the current filter panel so the tracker compares like with like
+  const a = {
+    id: String(Date.now()), q: ctx.q,
+    target: hasTarget ? target : null,
+    pctBelow: hasPct ? pct : null,
+    currency: ctx.currency,
+    cat: $("#fCat").value || null,
+    cond: $("#fCond").value || null,
+    min: parseFloat($("#fMin").value) || null,
+    max: parseFloat($("#fMax").value) || null,
+    excl: $("#fExclude").value.trim(),
+    createdAt: Date.now(), lastRunAt: null, seen: [], hits: 0,
+  };
   const alerts = [a, ...getAlerts().filter((x) => x.q.toLowerCase() !== a.q.toLowerCase())].slice(0, 20);
   lsSet(K.alerts, alerts);
   renderAlerts();
   showStatus(
-    `Alert saved — new “${a.q}” listings at ${money(target, ctx.currency)} or less get flagged on every refresh. Manage alerts in the Watchlist tab.` +
-    (notifyOn ? "" : " Turn on 🔔 Alerts there for desktop pings."), "ok");
+    `Alert saved — new “${a.q}” listings ${alertCondText(a)} get flagged on every refresh. Sync to the server in Settings for 24/7 alerts.` +
+    (notifyOn ? "" : " Turn on 🔔 Alerts in the Watchlist tab for desktop pings."), "ok");
   // seed with what's listed right now, so only genuinely NEW listings ping
   checkAlert(a, true).then(() => { lsSet(K.alerts, alerts); renderAlerts(); }).catch(() => { /* seeds on the next check instead */ });
 });
@@ -1114,7 +1144,8 @@ function createAlertFromScan() {
     currency: cur,
     suggested: market ? Math.round(market.median * 0.75) : parseFloat($("#fMax").value) || "",
     info: `Watching for new <b>“${esc(lastQuery.q)}”</b> listings.` +
-      (market ? ` Market median is <b>${money(market.median, cur)}</b> — a good target sits below it.` : ""),
+      (market ? ` Market median is <b>${money(market.median, cur)}</b> — a good target sits below it.` : "") +
+      ` Your current filters (category, condition, price range, excluded words) are saved with the alert so it compares like with like.`,
   });
 }
 
@@ -1125,15 +1156,19 @@ function editAlert(id) {
     mode: "edit",
     id: a.id,
     suggested: a.target,
-    info: `Editing the alert for <b>“${esc(a.q)}”</b> (currently ${money(a.target, a.currency)}).`,
+    pct: a.pctBelow,
+    info: `Editing the alert for <b>“${esc(a.q)}”</b> (currently ${alertCondText(a)}).`,
   });
 }
 
 async function checkAlert(a, seed) {
+  if (a.target == null) return []; // %-below-going-rate alerts are evaluated by the server tracker
   const p = new URLSearchParams();
-  p.set("q", a.q);
+  const excl = (a.excl || "").split(/[,\s]+/).filter(Boolean).map((w) => "-" + w).join(" ");
+  p.set("q", a.q + (excl ? " " + excl : ""));
   p.set("limit", "50");
   p.set("sort", "newlyListed");
+  if (a.cat) p.set("category_ids", a.cat);
   p.set("filter", `price:[..${a.target}],priceCurrency:${a.currency}`);
   const data = await ebayGET("/buy/browse/v1/item_summary/search?" + p.toString(), true);
   const hiddenSet = new Set(getHidden());
@@ -1187,7 +1222,7 @@ function runAlertSearch(id) {
   const a = getAlerts().find((x) => x.id === id);
   if (!a) return;
   $("#q").value = a.q;
-  $("#fMax").value = a.target;
+  if (a.target != null) $("#fMax").value = a.target;
   $("#fSort").value = "newest";
   switchTab("search");
   runScan(a.q, false, true);
@@ -1212,6 +1247,94 @@ function openTargetDialog(id) {
 }
 
 $("#marketStrip").addEventListener("click", (e) => { if (e.target.closest("#mkAlert")) createAlertFromScan(); });
+
+/* ============================================================
+   24/7 SERVER TRACKER — talks to the worker's admin API
+   ============================================================ */
+function trackerLine(msg, cls) {
+  const el = $("#trackerLine");
+  el.textContent = msg;
+  el.className = "status-inline" + (cls ? " " + cls : "");
+}
+
+function unb64u(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(s + "=".repeat((4 - (s.length % 4)) % 4));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+async function workerAPI(method, path, body) {
+  settings = readSettingsForm();
+  lsSet(K.settings, settings);
+  if (!settings.proxy) throw new Error("Set the worker/proxy URL in the eBay API section first.");
+  if (!settings.adminToken) throw new Error("Enter the worker admin token first (must match the ADMIN_TOKEN secret).");
+  const res = await fetch(settings.proxy + path, {
+    method,
+    headers: { "Authorization": "Bearer " + settings.adminToken, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  }).catch(() => { throw new Error("Couldn't reach the worker — check the URL and that the latest worker.js is deployed."); });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Worker error " + res.status);
+  return data;
+}
+
+$("#syncTrackers").addEventListener("click", async () => {
+  try {
+    const alerts = getAlerts();
+    if (!alerts.length) { trackerLine("No deal alerts to sync — save one from the market strip after a scan.", "err"); return; }
+    trackerLine("Syncing…");
+    // config only: keyword + filters + thresholds — never listing data
+    const r = await workerAPI("PUT", "/api/trackers", alerts.map((a) => ({
+      id: a.id, q: a.q,
+      ceiling: a.target != null ? a.target : null,
+      pctBelow: a.pctBelow != null ? a.pctBelow : null,
+      categoryId: a.cat || null, condition: a.cond || null,
+      minPrice: a.min != null ? a.min : null, maxPrice: a.max != null ? a.max : null,
+      exclude: a.excl || "", currency: a.currency || "USD", enabled: true,
+    })));
+    trackerLine(`Synced ${r.count} tracker${r.count === 1 ? "" : "s"} ✓${r.capped ? " (capped at 8 to protect the API budget)" : ""} — the worker polls them on every cron tick.`, "ok");
+  } catch (e) { trackerLine(e.message, "err"); }
+});
+
+$("#pushEnable").addEventListener("click", async () => {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) throw new Error("This browser doesn't support Web Push. On iPhone, install the app to the home screen first.");
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") throw new Error("Notifications are blocked for this site — allow them in browser settings.");
+    trackerLine("Subscribing this device…");
+    const reg = await navigator.serviceWorker.ready;
+    const vapid = await fetch(settings.proxy + "/api/vapid").then((r) => r.json()).catch(() => null);
+    if (!vapid || !vapid.publicKey) throw new Error("Worker has no VAPID keys — run `node webpush-keys.js` and add the two secrets (see README).");
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(vapid.publicKey) });
+    const r = await workerAPI("POST", "/api/push/subscribe", sub.toJSON());
+    trackerLine(`Push enabled on this device ✓ (${r.devices} device${r.devices === 1 ? "" : "s"} registered). Hit “Test notification” to confirm delivery.`, "ok");
+  } catch (e) { trackerLine(e.message, "err"); }
+});
+
+$("#testNotify").addEventListener("click", async () => {
+  try {
+    trackerLine("Sending test…");
+    const r = await workerAPI("POST", "/api/test-notify");
+    const ok = r.results.some((s) => s.endsWith("ok"));
+    trackerLine(r.results.length
+      ? "Test sent → " + r.results.join(", ")
+      : "No channels configured — enable push here or set the NTFY_TOPIC variable on the worker.", ok ? "ok" : "err");
+  } catch (e) { trackerLine(e.message, "err"); }
+});
+
+$("#trackerStatus").addEventListener("click", async () => {
+  try {
+    trackerLine("Fetching status…");
+    const s = await workerAPI("GET", "/api/status");
+    const per = s.trackers.map((t) => `“${t.q}” ${t.baselineMedian != null ? "going ~" + money(t.baselineMedian) : (t.pctBelow != null ? "baseline pending" : "ceiling only")}`);
+    trackerLine(
+      `${s.trackers.length} tracker${s.trackers.length === 1 ? "" : "s"} · ` +
+      `last poll ${s.lastRunAt ? timeAgo(Date.parse(s.lastRunAt)) : "never — is the cron trigger added?"} · ` +
+      `${s.pushDevices} push device${s.pushDevices === 1 ? "" : "s"} · ntfy ${s.ntfy ? "on" : "off"} · ` +
+      `≈${s.estCallsPerDay.toLocaleString()} eBay calls/day at 2-min polling` +
+      (per.length ? " · " + per.join(" · ") : ""), "ok");
+  } catch (e) { trackerLine(e.message, "err"); }
+});
 
 /* ============================================================
    PROFIT CALCULATOR — per listing, fees + processing + promoted
@@ -1295,11 +1418,11 @@ const dashData = new Map(); // alertId → normalized items (session only — da
 
 function dashColHTML(a, items) {
   return `<div class="dash-col">
-    <div class="dash-head"><b>${esc(a.q)}</b><span class="dim">target ${money(a.target, a.currency)}</span></div>
+    <div class="dash-head"><b>${esc(a.q)}</b><span class="dim">${alertCondText(a)}</span></div>
     ${items
       ? (items.map((x) => {
           const t = x.shippingKnown ? x.total : x.price;
-          const under = t != null && t <= a.target;
+          const under = t != null && a.target != null && t <= a.target;
           return `<a class="dash-row${under ? " under" : ""}" href="${esc(x.url)}" target="_blank" rel="noopener">
             <span class="dash-title">${esc(x.title)}</span>
             <span class="dash-price">${money(t, x.currency)}</span>
