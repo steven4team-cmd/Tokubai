@@ -520,7 +520,8 @@ function renderResults() {
     return ((b.sc && b.sc.score) || -1) - ((a.sc && a.sc.score) || -1);
   });
 
-  grid.innerHTML = scored.map(({ x, sc }) => cardHTML(x, sc)).join("");
+  grid.innerHTML = scored.map(({ x, sc }) => cardHTML(x, sc)).join("") ||
+    (results.length ? `<div class="filtered-note">All ${results.length} results are hidden by the Seller quality / Hidden gems view filters — loosen them to see listings again.</div>` : "");
   $("#emptyState").hidden = results.length > 0;
   $("#exportBtn").hidden = results.length === 0;
 
@@ -609,6 +610,7 @@ async function runScan(rawQuery, append, keepFilters) {
     nextOffset = 0;
     results = [];
     market = null;
+    soldStats = null; // don't score a new query against the old query's sold comps
     totalAvail = 0;
     $("#results").innerHTML = '<div class="skel"></div>'.repeat(8);
     $("#emptyState").hidden = true;
@@ -1047,7 +1049,7 @@ function renderAlerts() {
   $("#alertRows").innerHTML = alerts.map((a) => `
     <div class="alert-row">
       <button class="alert-run" data-runalert="${esc(a.id)}" title="Run this search now, newest first">🔔 <b>${esc(a.q)}</b> — ${alertCondText(a)}</button>
-      <span class="alert-meta">${a.target == null ? "server-checked · " : ""}${a.lastRunAt ? `checked ${timeAgo(a.lastRunAt)}` : "not checked yet"}${a.hits ? ` · ${a.hits} found so far` : ""}</span>
+      <span class="alert-meta">${a.target == null && !a.every ? "server-checked · " : ""}${a.lastRunAt ? `checked ${timeAgo(a.lastRunAt)}` : "not checked yet"}${a.hits ? ` · ${a.hits} found so far` : ""}</span>
       <button class="alert-del" data-editalert="${esc(a.id)}" aria-label="Edit target price" title="Edit target price">✎</button>
       <button class="alert-del" data-delalert="${esc(a.id)}" aria-label="Delete this alert" title="Delete alert">✕</button>
     </div>`).join("");
@@ -1229,7 +1231,12 @@ function runAlertSearch(id) {
   const a = getAlerts().find((x) => x.id === id);
   if (!a) return;
   $("#q").value = a.q;
-  if (a.target != null) $("#fMax").value = a.target;
+  // restore the alert's snapshotted filters so the view matches what the tracker checks
+  $("#fCat").value = a.cat || "";
+  $("#fCond").value = a.cond || "";
+  $("#fMin").value = a.min != null ? a.min : "";
+  $("#fMax").value = a.target != null ? a.target : (a.max != null ? a.max : "");
+  $("#fExclude").value = a.excl || "";
   $("#fSort").value = "newest";
   switchTab("search");
   runScan(a.q, false, true);
@@ -1306,6 +1313,9 @@ $("#syncTrackers").addEventListener("click", async () => {
 
 $("#pushEnable").addEventListener("click", async () => {
   try {
+    settings = readSettingsForm(); // pick up a just-typed worker URL/token without requiring Save first
+    lsSet(K.settings, settings);
+    if (!settings.proxy) throw new Error("Set the worker/proxy URL in the eBay API section first.");
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) throw new Error("This browser doesn't support Web Push. On iPhone, install the app to the home screen first.");
     const perm = await Notification.requestPermission();
     if (perm !== "granted") throw new Error("Notifications are blocked for this site — allow them in browser settings.");
@@ -1354,7 +1364,7 @@ function openCalc(id) {
   if (!x || x.total == null) return;
   calcItem = x;
   $("#calcInfo").innerHTML = `<b>${esc(x.title.length > 60 ? x.title.slice(0, 60) + "…" : x.title)}</b><br>Buy total (item + shipping): <b>${money(x.total, x.currency)}</b>${x.shippingKnown ? "" : " (shipping unknown — item price only)"}`;
-  $("#calcResale").value = market ? market.median.toFixed(2) : "";
+  $("#calcResale").value = soldStats ? soldStats.median.toFixed(2) : market ? market.median.toFixed(2) : "";
   $("#calcFee").value = settings.feePct;
   $("#calcProc").value = settings.procPct;
   $("#calcProcFixed").value = settings.procFixed;

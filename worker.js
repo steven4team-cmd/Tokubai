@@ -254,10 +254,16 @@ async function ebaySearch(env, t, { newest, limit }) {
    Tracker engine (cron)
    ============================================================ */
 async function runTrackers(env) {
-  const cfg = ((await env.TRACKER.get("cfg:trackers", "json")) || []).filter((t) => t.enabled !== false).slice(0, MAX_TRACKERS);
+  const all = (await env.TRACKER.get("cfg:trackers", "json")) || [];
+  const cfg = all.filter((t) => t.enabled !== false).slice(0, MAX_TRACKERS);
   if (!cfg.length) return { ran: 0 };
   const state = (await env.TRACKER.get("state", "json")) || {};
   let dirty = false;
+  // drop state (ids/watermarks/medians) for trackers that no longer exist
+  const known = new Set(all.map((t) => t.id));
+  for (const k of Object.keys(state)) {
+    if (k !== "lastRunAt" && !known.has(k)) { delete state[k]; dirty = true; }
+  }
   const alerts = [];
   const errors = [];
 

@@ -257,6 +257,11 @@ a { color: inherit; }
 .dash-price { grid-area: price; font-weight: 700; text-align: right; }
 .dash-age { grid-area: age; color: var(--faint); font-size: 11px; text-align: right; }
 .dash-none { padding: 14px; font-size: 13px; color: var(--muted); }
+.filtered-note {
+  grid-column: 1 / -1; text-align: center; padding: 36px 16px;
+  color: var(--muted); font-size: 14px;
+  background: var(--chip); border-radius: var(--r);
+}
 .dash-skel { height: 90px; border: 0; border-radius: 0; }
 
 /* ---------- profit calculator ---------- */
