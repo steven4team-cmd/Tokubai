@@ -477,6 +477,9 @@ dialog h3 { margin: 0 0 6px; font-family: var(--display); font-weight: 800; lett
 .dlg-info { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
 .dlg-info b { color: var(--ink); }
 dialog label { display: block; font-weight: 600; font-size: 13.5px; }
+dialog label + label { margin-top: 12px; }
+.dlg-check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.dlg-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); }
 dialog input {
   display: block; width: 100%; margin-top: 6px;
   font: 15px var(--mono); color: var(--ink); background: var(--bg);

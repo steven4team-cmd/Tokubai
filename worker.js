@@ -117,6 +117,7 @@ async function handleAPI(request, env, url) {
       q: String(t.q || "").trim(),
       ceiling: t.ceiling != null ? Number(t.ceiling) : null,
       pctBelow: t.pctBelow != null ? Number(t.pctBelow) : null,
+      every: t.every === true,
       categoryId: t.categoryId || null,
       condition: t.condition || null,
       minPrice: t.minPrice != null ? Number(t.minPrice) : null,
@@ -124,7 +125,7 @@ async function handleAPI(request, env, url) {
       exclude: String(t.exclude || ""),
       currency: t.currency || "USD",
       enabled: t.enabled !== false,
-    })).filter((t) => t.q && (t.ceiling != null || t.pctBelow != null));
+    })).filter((t) => t.q && (t.ceiling != null || t.pctBelow != null || t.every));
     await env.TRACKER.put("cfg:trackers", JSON.stringify(trackers));
     return json({ ok: true, count: trackers.length, capped: body.length > MAX_TRACKERS });
   }
@@ -264,7 +265,8 @@ async function runTrackers(env) {
     const ts = state[t.id] || (state[t.id] = { watermark: 0, recentIds: [], baseline: null });
     try {
       // 1. going-rate baseline: rolling median, refreshed every 6h
-      if (t.pctBelow != null && (!ts.baseline || Date.now() - ts.baseline.at > BASELINE_TTL_MS)) {
+      // (also kept for every-listing trackers so alerts carry price context)
+      if ((t.pctBelow != null || t.every) && (!ts.baseline || Date.now() - ts.baseline.at > BASELINE_TTL_MS)) {
         const comps = await ebaySearch(env, t, { newest: false, limit: 100 });
         const totals = comps.map((x) => x.total).sort((a, b) => a - b);
         const mid = Math.floor(totals.length / 2);
@@ -300,10 +302,11 @@ async function runTrackers(env) {
       for (const x of fresh) {
         const underCeiling = t.ceiling != null && x.total <= t.ceiling;
         const underPct = t.pctBelow != null && base != null && x.total <= base * (1 - t.pctBelow / 100);
-        if (!underCeiling && !underPct) continue;
+        if (!underCeiling && !underPct && !t.every) continue;
         const pct = base != null ? Math.round((1 - x.total / base) * 100) : null;
+        const isDeal = underCeiling || underPct || (pct != null && pct >= 20);
         alerts.push({
-          title: `🔥 ${t.q}: ${fmtMoney(x.total, x.currency)}${base != null ? ` (going ~${fmtMoney(base, x.currency)}${pct != null && pct > 0 ? `, ${pct}% below` : ""})` : ""}`,
+          title: `${isDeal ? "🔥" : "🆕"} ${t.q}: ${fmtMoney(x.total, x.currency)}${base != null ? ` (going ~${fmtMoney(base, x.currency)}${pct != null && pct > 0 ? `, ${pct}% below` : ""})` : ""}`,
           body: x.title,
           url: x.url,
           tag: "tokubai-" + t.id,

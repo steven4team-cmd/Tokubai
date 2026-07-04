@@ -1057,6 +1057,7 @@ const alertDlg = $("#alertDlg");
 let dlgCtx = null; // what the open dialog is editing/creating
 
 function alertCondText(a) {
+  if (a.every) return "every new listing";
   const bits = [];
   if (a.target != null) bits.push(`at or under ${money(a.target, a.currency)}`);
   if (a.pctBelow != null) bits.push(`${a.pctBelow}%+ below going rate`);
@@ -1069,7 +1070,9 @@ function openAlertDialog(ctx) {
   $("#alertDlgInfo").innerHTML = ctx.info;
   $("#alertTarget").value = ctx.suggested != null ? ctx.suggested : "";
   $("#alertPct").value = ctx.pct != null ? ctx.pct : "";
+  $("#alertEvery").checked = !!ctx.every;
   $("#alertPctRow").hidden = ctx.mode === "watchtarget"; // snipe targets are absolute only
+  $("#alertEveryRow").hidden = ctx.mode === "watchtarget";
   alertDlg.returnValue = "";
   alertDlg.showModal();
   $("#alertTarget").select();
@@ -1096,9 +1099,10 @@ alertDlg.addEventListener("close", () => {
     return;
   }
 
+  const every = $("#alertEvery").checked;
   const hasTarget = target != null && !isNaN(target) && target > 0;
   const hasPct = pct != null && pct > 0;
-  if (!hasTarget && !hasPct) { showStatus("Alert not saved — set an absolute price, a % below going rate, or both.", "err"); return; }
+  if (!hasTarget && !hasPct && !every) { showStatus("Alert not saved — set a price, a % below going rate, or tick “every new listing”.", "err"); return; }
 
   if (ctx.mode === "edit") {
     const alerts = getAlerts();
@@ -1106,6 +1110,7 @@ alertDlg.addEventListener("close", () => {
     if (!a) return;
     a.target = hasTarget ? target : null;
     a.pctBelow = hasPct ? pct : null;
+    a.every = every || undefined;
     lsSet(K.alerts, alerts);
     renderAlerts();
     showWatchStatus(`Alert updated — “${a.q}” now flags listings ${alertCondText(a)}.`, "ok");
@@ -1117,6 +1122,7 @@ alertDlg.addEventListener("close", () => {
     id: String(Date.now()), q: ctx.q,
     target: hasTarget ? target : null,
     pctBelow: hasPct ? pct : null,
+    every: every || undefined,
     currency: ctx.currency,
     cat: $("#fCat").value || null,
     cond: $("#fCond").value || null,
@@ -1157,19 +1163,20 @@ function editAlert(id) {
     id: a.id,
     suggested: a.target,
     pct: a.pctBelow,
+    every: a.every,
     info: `Editing the alert for <b>“${esc(a.q)}”</b> (currently ${alertCondText(a)}).`,
   });
 }
 
 async function checkAlert(a, seed) {
-  if (a.target == null) return []; // %-below-going-rate alerts are evaluated by the server tracker
+  if (a.target == null && !a.every) return []; // %-below-going-rate alerts are evaluated by the server tracker
   const p = new URLSearchParams();
   const excl = (a.excl || "").split(/[,\s]+/).filter(Boolean).map((w) => "-" + w).join(" ");
   p.set("q", a.q + (excl ? " " + excl : ""));
   p.set("limit", "50");
   p.set("sort", "newlyListed");
   if (a.cat) p.set("category_ids", a.cat);
-  p.set("filter", `price:[..${a.target}],priceCurrency:${a.currency}`);
+  if (a.target != null) p.set("filter", `price:[..${a.target}],priceCurrency:${a.currency}`);
   const data = await ebayGET("/buy/browse/v1/item_summary/search?" + p.toString(), true);
   const hiddenSet = new Set(getHidden());
   const blockedSet = new Set(getBlocked());
@@ -1179,7 +1186,7 @@ async function checkAlert(a, seed) {
   const matches = [];
   for (const x of items) {
     const total = x.shippingKnown ? x.total : x.price; // shipping unknown → judge by item price
-    if (total == null || total > a.target) continue;
+    if (!a.every && (total == null || total > a.target)) continue;
     if (seen.has(x.id)) continue;
     seen.add(x.id);
     if (!seed) matches.push(x);
@@ -1288,6 +1295,7 @@ $("#syncTrackers").addEventListener("click", async () => {
       id: a.id, q: a.q,
       ceiling: a.target != null ? a.target : null,
       pctBelow: a.pctBelow != null ? a.pctBelow : null,
+      every: !!a.every,
       categoryId: a.cat || null, condition: a.cond || null,
       minPrice: a.min != null ? a.min : null, maxPrice: a.max != null ? a.max : null,
       exclude: a.excl || "", currency: a.currency || "USD", enabled: true,
