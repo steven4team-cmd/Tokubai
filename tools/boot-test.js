@@ -23,13 +23,14 @@ function makeEl() {
 
 // some of these are getter-only globals in modern Node — defineProperty wins
 const def = (name, value) => Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
-def("window", globalThis);
+def("window", { addEventListener() {}, scrollTo() {}, scrollY: 0 }); // feature probes ("Notification" in window) come back false
 def("document", {
   querySelector: () => makeEl(),
   querySelectorAll: () => [],
   addEventListener: () => {},
   createElement: () => makeEl(),
   documentElement: makeEl(),
+  body: makeEl(),
   activeElement: null,
   title: "",
 });

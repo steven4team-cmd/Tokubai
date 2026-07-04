@@ -109,6 +109,7 @@
         <input id="fGems" type="checkbox" />
       </label>
       <button id="resetFilters" class="linklike reset-filters" type="button">&#10005; reset filters</button>
+      <button id="viewToggle" class="btn ghost view-toggle" type="button" title="Toggle grid / list view">&#8801; List</button>
       <label>Sort by
         <select id="fSort">
           <option value="score">Deal score</option>
@@ -309,6 +310,8 @@
 <footer class="foot wrap">
   <span>Deal scores and profit figures are estimates from live <em>asking</em> prices, not sold data. Always check sold comps before buying.</span>
 </footer>
+
+<button id="toTop" class="totop" hidden title="Back to top" aria-label="Back to top">&#8593;</button>
 
 <div id="toast" class="toast" hidden><span id="toastMsg"></span><button id="toastAct" class="toast-act" hidden></button></div>
 

@@ -29,7 +29,7 @@ function storageBroken() {
   showStatus("⚠ This browser is blocking local storage — settings, watchlist, and alerts CANNOT be saved. Common causes: private/incognito window, blocked cookies/site data, or opening the app as a file:// page. Fix that first; nothing will persist until you do.", "err");
 }
 
-const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers", snipe: "ff_snipe", insights: "ff_insights", wsort: "ff_wsort" };
+const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers", snipe: "ff_snipe", insights: "ff_insights", wsort: "ff_wsort", view: "ff_view" };
 
 const DEFAULTS = { clientId: "", clientSecret: "", proxy: "", market: "EBAY_US", feePct: 13.25, shipOut: 5, procPct: 2.9, procFixed: 0.3, promoPct: 0, adminToken: "" };
 let settings = { ...DEFAULTS, ...lsGet(K.settings, {}) };
@@ -685,6 +685,7 @@ async function runScan(rawQuery, append, keepFilters) {
   btn.disabled = true;
   moreBtn.disabled = true;
   showStatus(append ? "Loading more…" : `Scanning eBay for “${q}”…`, "busy");
+  $(".hero").classList.add("compact"); // results deserve the screen space now
   if (!append) {
     nextOffset = 0;
     results = [];
@@ -761,6 +762,21 @@ $("#resetFilters").addEventListener("click", () => {
 
 // on small screens the filter panel collapses behind this toggle
 $("#filtersToggle").addEventListener("click", () => $("#filters").classList.toggle("open"));
+
+/* ---------- grid ↔ list view ---------- */
+function applyView(v) {
+  document.body.classList.toggle("listview", v === "list");
+  $("#viewToggle").innerHTML = v === "list" ? "⊞ Grid" : "≡ List";
+}
+$("#viewToggle").addEventListener("click", () => {
+  const v = document.body.classList.contains("listview") ? "grid" : "list";
+  lsSet(K.view, v);
+  applyView(v);
+});
+
+/* ---------- back to top ---------- */
+window.addEventListener("scroll", () => { $("#toTop").hidden = window.scrollY < 900; }, { passive: true });
+$("#toTop").addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
 $("#fSort").addEventListener("change", () => results.length && renderResults());
 
 /* ---------- recent searches ---------- */
@@ -1604,6 +1620,7 @@ function dashColHTML(a, items) {
 async function renderDashboard(force) {
   const alerts = getAlerts();
   $("#dashEmpty").hidden = alerts.length > 0;
+  $("#refreshDash").hidden = alerts.length === 0;
   const grid = $("#dashGrid");
   grid.innerHTML = alerts.map((a) => dashColHTML(a, dashData.get(a.id))).join("");
   if (!alerts.length) return;
@@ -1812,6 +1829,7 @@ document.addEventListener("keydown", (e) => {
   }
 })();
 applyTheme(theme);
+applyView(lsGet(K.view, "grid"));
 loadSettingsForm();
 renderRecent();
 updateWatchCount();

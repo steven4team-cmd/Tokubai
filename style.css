@@ -135,6 +135,9 @@ a { color: inherit; }
   margin: 0 0 10px; line-height: 1.12;
 }
 .sub { color: var(--muted); margin: 0 0 22px; max-width: 58ch; }
+/* once results are on screen, the hero gets out of their way */
+.hero.compact h1 { font-size: clamp(18px, 3vw, 24px); margin-bottom: 6px; }
+.hero.compact .sub { display: none; }
 .searchbar { display: flex; gap: 10px; }
 .searchbar input {
   flex: 1; min-width: 0; padding: 14px 20px; font: 15px var(--body);
@@ -190,6 +193,7 @@ a { color: inherit; }
 }
 
 .filters-toggle { display: none; }
+.view-toggle { align-self: center; padding: 7px 14px; font-size: 12.5px; }
 .reset-filters { align-self: center; font-size: 12px; color: var(--muted); text-decoration-style: dashed; }
 .reset-filters:hover { color: var(--bad); }
 
@@ -433,6 +437,36 @@ a { color: inherit; }
 .watch-btn.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 
 .more-row { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 24px 0 0; }
+
+/* ---------- list view ---------- */
+.listview .grid { display: flex; flex-direction: column; gap: 10px; }
+.listview .lcard { flex-direction: row; align-items: stretch; }
+.listview .lcard .imgbox {
+  width: 150px; min-width: 150px; aspect-ratio: 4 / 3;
+  border-radius: var(--r) 0 0 var(--r);
+  border-bottom: 0; border-right: 1px solid var(--border);
+}
+.listview .lcard .body { padding: 12px 14px; gap: 6px; }
+.listview .lcard h3 { min-height: 0; }
+.listview .lcard .actions {
+  flex-direction: column; justify-content: center;
+  width: 150px; min-width: 150px; padding: 12px 14px 12px 0;
+}
+.listview .lcard .actions .btn { flex: 0 0 auto; }
+@media (max-width: 640px) {
+  .listview .lcard .imgbox { width: 104px; min-width: 104px; }
+  .listview .lcard .actions { width: 112px; min-width: 112px; }
+}
+
+/* ---------- back to top ---------- */
+.totop {
+  position: fixed; right: 18px; bottom: 18px; z-index: 80;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--surface); color: var(--blue);
+  border: 1.5px solid var(--border-strong); box-shadow: var(--shadow-md);
+  font-size: 18px; line-height: 1;
+}
+.totop:hover { border-color: var(--blue); background: var(--blue-soft); }
 
 /* ---------- toast ---------- */
 .toast {
