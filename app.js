@@ -428,7 +428,7 @@ function sparkSVG(hist) {
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
   const dir = vs[vs.length - 1] < vs[0] ? "down" : vs[vs.length - 1] > vs[0] ? "up" : "flat";
-  return `<svg class="spark ${dir}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true" title="Price history since saved"><polyline points="${line}" fill="none" vector-effect="non-scaling-stroke"/></svg>`;
+  return `<svg class="spark ${dir}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${line}" fill="none" vector-effect="non-scaling-stroke"/></svg>`;
 }
 
 function timeAgo(ts) {
@@ -460,7 +460,7 @@ function cardHTML(x, sc, opts) {
   <article class="lcard${sc && sc.hot ? " hot" : ""}${o.ended ? " ended" : ""}" data-id="${esc(x.id)}">
     <div class="imgbox">
       <img src="${esc(x.img)}" alt="" loading="lazy" onerror="this.src='${FALLBACK_IMG}'" />
-      ${sc ? `<span class="tag-score t-${sc.tier}" title="Deal score ${sc.score}/100 — ${Math.round(sc.discount * 100)}% vs market median">⛁ ${sc.score} ${tierLabel[sc.tier]}</span>` : ""}
+      ${sc ? `<span class="tag-score t-${sc.tier}" title="Deal score ${sc.score}/100 — ${Math.round(sc.discount * 100)}% vs ${sc.soldBased ? "SOLD" : "asking"} median">⛁ ${sc.score} ${tierLabel[sc.tier]}</span>` : ""}
       ${o.watch ? "" : `<button class="hide-btn" data-hide="${esc(x.id)}" title="Hide this listing from future scans" aria-label="Hide listing">✕</button>`}
     </div>
     <div class="body">
@@ -674,9 +674,11 @@ function pushRecent(qr) {
 }
 function renderRecent() {
   const r = lsGet(K.recent, []);
-  $("#recentChips").innerHTML = r.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("");
+  $("#recentChips").innerHTML = r.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("") +
+    (r.length ? `<button class="chip chip-x" data-clearrecent title="Clear recent searches">✕ clear</button>` : "");
 }
 $("#recentChips").addEventListener("click", (e) => {
+  if (e.target.closest("[data-clearrecent]")) { lsSet(K.recent, []); renderRecent(); return; }
   const b = e.target.closest("[data-q]");
   if (b) { $("#q").value = b.dataset.q; runScan(b.dataset.q, false); }
 });
@@ -945,7 +947,14 @@ async function refreshWatchPrices(auto) {
   }
   await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
 
-  lsSet(K.watch, list);
+  // merge into a fresh read — the user may have watched/unwatched mid-refresh
+  const cur = getWatch();
+  for (const w of list) {
+    const m = cur.find((x) => x.id === w.id);
+    if (m) Object.assign(m, w);
+  }
+  lsSet(K.watch, cur);
+  watchIdsInvalidate();
   renderWatch();
   btn.disabled = false;
   isRefreshing = false;
@@ -1070,11 +1079,15 @@ function openAlertDialog(ctx) {
   dlgCtx = ctx;
   $("#alertDlgTitle").textContent = ctx.mode === "edit" ? "Edit deal alert" : "New deal alert";
   $("#alertDlgInfo").innerHTML = ctx.info;
+  $("#alertQ").value = ctx.q || "";
   $("#alertTarget").value = ctx.suggested != null ? ctx.suggested : "";
   $("#alertPct").value = ctx.pct != null ? ctx.pct : "";
   $("#alertEvery").checked = !!ctx.every;
+  $("#alertQRow").hidden = ctx.mode === "watchtarget";
   $("#alertPctRow").hidden = ctx.mode === "watchtarget"; // snipe targets are absolute only
   $("#alertEveryRow").hidden = ctx.mode === "watchtarget";
+  $("#alertSnap").checked = false;
+  $("#alertSnapRow").hidden = ctx.mode !== "edit";
   alertDlg.returnValue = "";
   alertDlg.showModal();
   $("#alertTarget").select();
@@ -1102,26 +1115,39 @@ alertDlg.addEventListener("close", () => {
   }
 
   const every = $("#alertEvery").checked;
+  const qNew = $("#alertQ").value.trim();
   const hasTarget = target != null && !isNaN(target) && target > 0;
   const hasPct = pct != null && pct > 0;
+  if (!qNew) { showStatus("Alert not saved — the search phrase can't be empty.", "err"); return; }
   if (!hasTarget && !hasPct && !every) { showStatus("Alert not saved — set a price, a % below going rate, or tick “every new listing”.", "err"); return; }
 
   if (ctx.mode === "edit") {
     const alerts = getAlerts();
     const a = alerts.find((x) => x.id === ctx.id);
     if (!a) return;
+    const qChanged = qNew.toLowerCase() !== a.q.toLowerCase();
+    a.q = qNew;
     a.target = hasTarget ? target : null;
     a.pctBelow = hasPct ? pct : null;
     a.every = every || undefined;
+    if ($("#alertSnap").checked) {
+      a.cat = $("#fCat").value || null;
+      a.cond = $("#fCond").value || null;
+      a.min = parseFloat($("#fMin").value) || null;
+      a.max = parseFloat($("#fMax").value) || null;
+      a.excl = $("#fExclude").value.trim();
+    }
+    if (qChanged || $("#alertSnap").checked) a.seen = []; // different search — forget old ids, re-seed
     lsSet(K.alerts, alerts);
     renderAlerts();
     showWatchStatus(`Alert updated — “${a.q}” now flags listings ${alertCondText(a)}.`, "ok");
+    if (!a.seen.length) checkAlert(a, true).then(() => persistAlertSeed(a)).catch(() => { /* seeds on next check */ });
     return;
   }
 
   // snapshot the current filter panel so the tracker compares like with like
   const a = {
-    id: String(Date.now()), q: ctx.q,
+    id: String(Date.now()), q: qNew,
     target: hasTarget ? target : null,
     pctBelow: hasPct ? pct : null,
     every: every || undefined,
@@ -1133,15 +1159,27 @@ alertDlg.addEventListener("close", () => {
     excl: $("#fExclude").value.trim(),
     createdAt: Date.now(), lastRunAt: null, seen: [], hits: 0,
   };
-  const alerts = [a, ...getAlerts().filter((x) => x.q.toLowerCase() !== a.q.toLowerCase())].slice(0, 20);
-  lsSet(K.alerts, alerts);
+  lsSet(K.alerts, [a, ...getAlerts().filter((x) => x.q.toLowerCase() !== a.q.toLowerCase())].slice(0, 20));
   renderAlerts();
   showStatus(
     `Alert saved — new “${a.q}” listings ${alertCondText(a)} get flagged on every refresh. Sync to the server in Settings for 24/7 alerts.` +
     (notifyOn ? "" : " Turn on 🔔 Alerts in the Watchlist tab for desktop pings."), "ok");
   // seed with what's listed right now, so only genuinely NEW listings ping
-  checkAlert(a, true).then(() => { lsSet(K.alerts, alerts); renderAlerts(); }).catch(() => { /* seeds on the next check instead */ });
+  checkAlert(a, true).then(() => persistAlertSeed(a)).catch(() => { /* seeds on the next check instead */ });
 });
+
+// merge one alert's seed/counters into current storage — never overwrite the
+// whole list with a stale copy (the user may have added/deleted alerts meanwhile)
+function persistAlertSeed(a) {
+  const cur = getAlerts();
+  const m = cur.find((x) => x.id === a.id);
+  if (!m) return; // deleted while we were seeding
+  m.seen = a.seen;
+  m.lastRunAt = a.lastRunAt;
+  m.hits = a.hits;
+  lsSet(K.alerts, cur);
+  renderAlerts();
+}
 
 function createAlertFromScan() {
   if (!lastQuery) return;
@@ -1150,7 +1188,7 @@ function createAlertFromScan() {
     mode: "create",
     q: lastQuery.q,
     currency: cur,
-    suggested: market ? Math.round(market.median * 0.75) : parseFloat($("#fMax").value) || "",
+    suggested: soldStats ? Math.round(soldStats.median * 0.75) : market ? Math.round(market.median * 0.75) : parseFloat($("#fMax").value) || "",
     info: `Watching for new <b>“${esc(lastQuery.q)}”</b> listings.` +
       (market ? ` Market median is <b>${money(market.median, cur)}</b> — a good target sits below it.` : "") +
       ` Your current filters (category, condition, price range, excluded words) are saved with the alert so it compares like with like.`,
@@ -1163,6 +1201,7 @@ function editAlert(id) {
   openAlertDialog({
     mode: "edit",
     id: a.id,
+    q: a.q,
     suggested: a.target,
     pct: a.pctBelow,
     every: a.every,
@@ -1214,12 +1253,18 @@ async function checkDealAlerts(auto) {
       if (m === "RATE_LIMIT" || m === "BAD_KEYS" || m === "PROXY_DOWN") break; // fatal — stop here
     }
   }
-  lsSet(K.alerts, alerts);
+  // merge into a fresh read — the user may have edited/deleted alerts mid-check
+  const cur = getAlerts();
+  for (const a of alerts) {
+    const m = cur.find((x) => x.id === a.id);
+    if (m) { m.seen = a.seen; m.lastRunAt = a.lastRunAt; m.hits = a.hits; }
+  }
+  lsSet(K.alerts, cur);
   renderAlerts();
   isCheckingAlerts = false;
   if (found.length) {
     const lines = found.map(({ a, x }) =>
-      `${x.title.length > 44 ? x.title.slice(0, 44) + "…" : x.title} — ${money(x.shippingKnown ? x.total : x.price, x.currency)} (target ${money(a.target, a.currency)})`);
+      `${x.title.length > 44 ? x.title.slice(0, 44) + "…" : x.title} — ${money(x.shippingKnown ? x.total : x.price, x.currency)}${a.target != null ? ` (target ${money(a.target, a.currency)})` : " (new listing)"}`);
     showWatchStatus(`🔔 ${found.length} new listing${found.length === 1 ? "" : "s"} under target! Click the alert to see them, newest first.`, "ok");
     pushNote(`Tokubai — ${found.length} new deal${found.length === 1 ? "" : "s"} under your target 🔔`, lines, "tokubai-alerts");
   } else if (!auto && !getWatch().length) {
@@ -1464,7 +1509,10 @@ async function renderDashboard(force) {
   for (const a of alerts) {
     if (!force && dashData.has(a.id)) continue;
     try {
-      const p = new URLSearchParams({ q: a.q, limit: "12", sort: "newlyListed" });
+      // same query shape as the alert check: excludes + category applied
+      const excl = (a.excl || "").split(/[,\s]+/).filter(Boolean).map((w) => "-" + w).join(" ");
+      const p = new URLSearchParams({ q: a.q + (excl ? " " + excl : ""), limit: "12", sort: "newlyListed" });
+      if (a.cat) p.set("category_ids", a.cat);
       const data = await ebayGET("/buy/browse/v1/item_summary/search?" + p, !!force);
       dashData.set(a.id, (data.itemSummaries || []).map(normalize)
         .filter((x) => x.price != null && !hiddenSet.has(x.id) && !blockedSet.has(x.seller.name)));

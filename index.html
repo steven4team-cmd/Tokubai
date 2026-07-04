@@ -312,6 +312,9 @@
   <form method="dialog">
     <h3 id="alertDlgTitle">New deal alert</h3>
     <p id="alertDlgInfo" class="dlg-info"></p>
+    <label id="alertQRow">Search phrase
+      <input id="alertQ" type="text" spellcheck="false" placeholder="e.g. ddr4 16gb" />
+    </label>
     <label>Alert when a new listing totals at or under
       <input id="alertTarget" type="number" min="0" step="0.01" inputmode="decimal" placeholder="absolute price, e.g. 250" />
     </label>
@@ -321,6 +324,10 @@
     <label id="alertEveryRow" class="dlg-check">
       <input id="alertEvery" type="checkbox" />
       Alert on <b>every</b> new listing, regardless of price
+    </label>
+    <label id="alertSnapRow" class="dlg-check" hidden>
+      <input id="alertSnap" type="checkbox" />
+      Replace saved filters with the current filter panel
     </label>
     <div class="dlg-actions">
       <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>
