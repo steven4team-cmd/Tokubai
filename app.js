@@ -10,7 +10,24 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const lsGet = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
-const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full/blocked */ } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { storageBroken(); } };
+
+// storage self-test — when localStorage is blocked or resetting, EVERYTHING
+// looks broken (settings/watchlist/alerts vanish). Detect it and say so.
+let storageOK = true;
+try {
+  localStorage.setItem("ff_probe", "1");
+  storageOK = localStorage.getItem("ff_probe") === "1";
+  localStorage.removeItem("ff_probe");
+} catch { storageOK = false; }
+
+let _storageWarned = false;
+function storageBroken() {
+  storageOK = false;
+  if (_storageWarned) return;
+  _storageWarned = true;
+  showStatus("⚠ This browser is blocking local storage — settings, watchlist, and alerts CANNOT be saved. Common causes: private/incognito window, blocked cookies/site data, or opening the app as a file:// page. Fix that first; nothing will persist until you do.", "err");
+}
 
 const K = { settings: "ff_settings", token: "ff_token", watch: "ff_watch", recent: "ff_recent", hidden: "ff_hidden", theme: "ff_theme", notify: "ff_notify", auto: "ff_auto", alerts: "ff_alerts", sellers: "ff_sellers", snipe: "ff_snipe", insights: "ff_insights", wsort: "ff_wsort" };
 
@@ -31,6 +48,10 @@ let nextOffset = 0;
 let totalAvail = 0;          // eBay's total match count for the last query
 let isScanning = false;      // prevents concurrent scans
 let pendingRefine = false;   // a filter changed mid-scan — re-run when done
+// eBay's own refinement engine (Brand, Model, Size…) — session only
+let aspects = [];            // latest aspect distributions for the current query
+let dominantCat = null;      // category eBay says the query belongs to
+let aspectSel = {};          // aspect name → Set of selected values
 const PAGE = 60;
 const FALLBACK_IMG = "data:image/svg+xml," + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 90"><rect width="120" height="90" fill="#eef1ee"/><path d="M42 48 56 34h14a5 5 0 0 1 5 5v14L61 67a4 4 0 0 1-5.6 0L42 53.6a4 4 0 0 1 0-5.6Z" fill="#c9cfca"/></svg>`);
@@ -101,9 +122,25 @@ $("#saveSettings").addEventListener("click", () => {
   settings = readSettingsForm();
   lsSet(K.settings, settings);
   localStorage.removeItem(K.token); // credentials may have changed
-  setInlineStatus("Saved ✓", "ok");
+  setInlineStatus(storageOK ? "Saved ✓" : "Saved for this session only — storage is blocked in this browser!", storageOK ? "ok" : "err");
   $("#setupNudge").hidden = settingsReady();
 });
+
+// auto-save as you type — a missed Save click should never lose your keys
+let _settingsSaveT = null;
+$$("#tab-settings input, #tab-settings select").forEach((el) => el.addEventListener("input", () => {
+  clearTimeout(_settingsSaveT);
+  _settingsSaveT = setTimeout(() => {
+    const before = settings;
+    settings = readSettingsForm();
+    if (settings.clientId !== before.clientId || settings.clientSecret !== before.clientSecret) {
+      localStorage.removeItem(K.token); // credentials changed — force a fresh token
+    }
+    lsSet(K.settings, settings);
+    setInlineStatus("Auto-saved ✓", "ok");
+    $("#setupNudge").hidden = settingsReady();
+  }, 700);
+}));
 
 $("#testSettings").addEventListener("click", async () => {
   settings = readSettingsForm();
@@ -210,6 +247,14 @@ function buildSearchPath(q, offset) {
   p.set("q", q + exq); // eBay supports -word exclusions natively
   p.set("limit", String(PAGE));
   p.set("offset", String(offset || 0));
+  p.set("fieldgroups", "ASPECT_REFINEMENTS"); // ask for eBay's dynamic filter data
+
+  // dynamic aspect refinements — eBay's left-rail filters, applied server-side
+  const selNames = Object.keys(aspectSel).filter((n) => aspectSel[n] && aspectSel[n].size);
+  if (dominantCat && selNames.length) {
+    p.set("aspect_filter", `categoryId:${dominantCat},` +
+      selNames.map((n) => `${n}:{${[...aspectSel[n]].join("|")}}`).join(","));
+  }
 
   const cat = $("#fCat").value;
   if (cat) p.set("category_ids", cat);
@@ -556,6 +601,39 @@ function renderResults() {
   }
 }
 
+/* ---------- dynamic aspect refinements (eBay's left-rail filters) ---------- */
+function renderAspects() {
+  const box = $("#aspects");
+  const anySel = Object.keys(aspectSel).some((n) => aspectSel[n] && aspectSel[n].size);
+  if (!aspects.length && !anySel) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = aspects.map((a) => {
+    const name = a.localizedAspectName;
+    const sel = aspectSel[name] || new Set();
+    const vals = (a.aspectValueDistributions || []).slice(0, 8);
+    if (!vals.length) return "";
+    return `<div class="aspect-group"><span class="aspect-name">${esc(name)}</span>` +
+      vals.map((v) => `<button class="chip aspect${sel.has(v.localizedAspectValue) ? " on" : ""}" data-aspect="${esc(name)}" data-value="${esc(v.localizedAspectValue)}">${esc(v.localizedAspectValue)}${v.matchCount != null ? ` <span class="cnt">${v.matchCount.toLocaleString()}</span>` : ""}</button>`).join("") +
+      `</div>`;
+  }).join("") +
+  (anySel ? `<button class="chip chip-x" data-clearaspects>✕ clear refinements</button>` : "");
+}
+
+$("#aspects").addEventListener("click", (e) => {
+  if (!lastQuery) return;
+  if (e.target.closest("[data-clearaspects]")) {
+    aspectSel = {};
+    runScan(lastQuery.raw, false, true);
+    return;
+  }
+  const b = e.target.closest("[data-aspect]");
+  if (!b) return;
+  const n = b.dataset.aspect, v = b.dataset.value;
+  aspectSel[n] = aspectSel[n] || new Set();
+  if (aspectSel[n].has(v)) aspectSel[n].delete(v); else aspectSel[n].add(v);
+  runScan(lastQuery.raw, false, true);
+});
+
 /* ---------- toast (with optional undo) ---------- */
 let toastTimer = null, toastAction = null;
 function toast(msg, actionLabel, onAction) {
@@ -612,6 +690,7 @@ async function runScan(rawQuery, append, keepFilters) {
     market = null;
     soldStats = null; // don't score a new query against the old query's sold comps
     totalAvail = 0;
+    if (!keepFilters) { aspectSel = {}; dominantCat = null; aspects = []; renderAspects(); } // new query, new refinements
     $("#results").innerHTML = '<div class="skel"></div>'.repeat(8);
     $("#emptyState").hidden = true;
     $("#marketStrip").hidden = true;
@@ -630,6 +709,11 @@ async function runScan(rawQuery, append, keepFilters) {
     market = computeMarket(results);
     lastQuery = { raw: rawQuery, q };
     totalAvail = data.total || 0;
+    if (!append && data.refinement) {
+      dominantCat = data.refinement.dominantCategoryId || dominantCat;
+      aspects = (data.refinement.aspectDistributions || []).slice(0, 6);
+      renderAspects();
+    }
     if (!append) soldStats = await fetchSoldStats(q); // null unless Insights access confirmed
     nextOffset += PAGE;
     $("#moreBtn").hidden = !(data.total && nextOffset < Math.min(data.total, 600));
@@ -1282,6 +1366,7 @@ function runAlertSearch(id) {
   const a = getAlerts().find((x) => x.id === id);
   if (!a) return;
   $("#q").value = a.q;
+  aspectSel = {}; dominantCat = null; // refinements belong to the previous query
   // restore the alert's snapshotted filters so the view matches what the tracker checks
   $("#fCat").value = a.cat || "";
   $("#fCond").value = a.cond || "";
@@ -1730,6 +1815,12 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
 }
 $("#setupNudge").hidden = settingsReady();
 $("#q").focus();
+
+// surface environment problems loudly — they masquerade as app bugs
+if (!storageOK) storageBroken();
+else if (location.protocol === "file:") {
+  showStatus("⚠ You're opening the app as a file:// page — saved settings can reset, and install/push won't work. Serve it over http instead: run `npx serve` in this folder, or enable GitHub Pages (see README) and use that URL.", "err");
+}
 
 // arrived via a shared link? run that scan straight away
 const urlQ = new URLSearchParams(location.search).get("q");
