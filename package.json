@@ -6,6 +6,7 @@
   "description": "eBay deal scanner — browser app plus a Node client for the eBay Browse API",
   "engines": { "node": ">=18" },
   "scripts": {
-    "search": "node ebay-client.js"
+    "search": "node ebay-client.js",
+    "check": "node --check app.js && node --check worker.js && node --check sw.js && node --check ebay-client.js && node tools/check-wiring.js && node tools/boot-test.js"
   }
 }
